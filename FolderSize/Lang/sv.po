@@ -1,0 +1,254 @@
+# Folder Size Redux translation: sv
+# This file is distributed under the same license as Folder Size Redux (GNU GPL v2).
+msgid ""
+msgstr ""
+"Project-Id-Version: Folder Size Redux\n"
+"Language: sv\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Name of the program (Control Panel item, window titles).
+msgctxt "app.name"
+msgid "Folder Size Redux"
+msgstr ""
+
+#. Description of the item in Control Panel.
+#, fuzzy
+msgctxt "app.info"
+msgid "Choose which drives Folder Size Redux scans and control its background service."
+msgstr "Anpassa kolumnen för Mappstorlek och hantera tjänsten för Folder Size-cachet."
+
+#. Title of the first tab of the settings.
+msgctxt "tab.general"
+msgid "General"
+msgstr "Visa"
+
+#. Group of check boxes choosing the types of drives the service scans.
+msgctxt "general.drive_types"
+msgid "Drive types to scan"
+msgstr ""
+
+#. Check box. & marks the access key.
+msgctxt "general.drive_hard"
+msgid "&Hard drives"
+msgstr ""
+
+#. Check box. & marks the access key.
+msgctxt "general.drive_removable"
+msgid "&Removable storage"
+msgstr ""
+
+#. Check box. & marks the access key.
+msgctxt "general.drive_cd"
+msgid "CD/&DVD drives"
+msgstr ""
+
+#. Check box. & marks the access key.
+msgctxt "general.drive_network"
+msgid "&Network shares"
+msgstr ""
+
+#. Group choosing the order of the list when a window opens.
+msgctxt "general.default_sort"
+msgid "Default sort"
+msgstr ""
+
+#. Group with the list of languages of the program.
+msgctxt "general.language"
+msgid "Language"
+msgstr ""
+
+#. First choice of the language list: use the language of Windows.
+msgctxt "general.language_system"
+msgid "System default"
+msgstr ""
+
+#. Sort order and column header: by name, folders first.
+msgctxt "sort.name"
+msgid "Name"
+msgstr ""
+
+#. Sort order and column header: by name, folders and files mixed.
+msgctxt "sort.name_mixed"
+msgid "Name (mixed)"
+msgstr ""
+
+#. Sort order and column header: by size, largest first.
+msgctxt "sort.size"
+msgid "Size"
+msgstr ""
+
+#. Title of the tab controlling the background service.
+msgctxt "tab.service"
+msgid "Service"
+msgstr "Tjänst"
+
+#. Label followed by the state of the service.
+msgctxt "service.status_label"
+msgid "Service status:"
+msgstr "Tjänstens status:"
+
+#. Button. & marks the access key.
+msgctxt "service.start"
+msgid "&Start"
+msgstr "&Starta"
+
+#. Button. & marks the access key.
+msgctxt "service.stop"
+msgid "S&top"
+msgstr "S&toppa"
+
+#. Button. & marks the access key.
+msgctxt "service.pause"
+msgid "&Pause"
+msgstr "&Pausa"
+
+#. Button. & marks the access key.
+msgctxt "service.resume"
+msgid "&Resume"
+msgstr "&Fortsätt"
+
+msgctxt "service.admin_note"
+msgid "You must have Administrator privileges to modify the service."
+msgstr "Du måste vara inloggad som Administrator för att kunna hantera tjänsten."
+
+msgctxt "service.start_info"
+msgid "While the service is running, a Folder Size cache is in memory and monitoring your folders."
+msgstr "När tjänsten är startad finns ett Folder Size-cache i minnet som övervakar dina mappar."
+
+msgctxt "service.stop_info"
+msgid "When the service is stopped, folder size information is not available in Explorer."
+msgstr "När tjänsten är stoppad finns inte informationen om mappars storlek tillgänglig i Utforskaren."
+
+msgctxt "service.pause_info"
+msgid "Pause the background scanning to free disk bandwidth."
+msgstr "Pausa övervakningen för att frigöra bandbredd till disk."
+
+msgctxt "service.resume_info"
+msgid "Resume to keep the cache updated."
+msgstr "Fortsätt för att hålla cachet uppdaterat."
+
+#. State of the service.
+msgctxt "service.state_running"
+msgid "Running"
+msgstr "Startad"
+
+#. State of the service.
+msgctxt "service.state_stopped"
+msgid "Stopped"
+msgstr "Stoppad"
+
+#. State of the service.
+msgctxt "service.state_unknown"
+msgid "Unknown"
+msgstr "Okänd"
+
+#. State of the service.
+msgctxt "service.state_paused"
+msgid "Paused"
+msgstr "Pausad"
+
+#. State of the service.
+msgctxt "service.state_starting"
+msgid "Starting"
+msgstr "Startar"
+
+#. State of the service.
+msgctxt "service.state_stopping"
+msgid "Stopping"
+msgstr "Stoppar"
+
+#. State of the service.
+msgctxt "service.state_resuming"
+msgid "Resuming"
+msgstr "Fortsätter"
+
+#. State of the service.
+msgctxt "service.state_pausing"
+msgid "Pausing"
+msgstr "Pausar"
+
+#. Description of the service in the Services console.
+msgctxt "service.description"
+msgid "Caches the sizes of all folders viewed in Explorer. The service monitors folders for changes and updates the cache in the background."
+msgstr "Cachar storleken på alla mappar som granskas i Utforskaren. Tjänsten övervakar mappar för förändringar och uppdaterar cachet i bakgrunden."
+
+#. Title of the About tab.
+msgctxt "tab.about"
+msgid "About"
+msgstr "Om"
+
+msgctxt "about.fork"
+msgid "Folder Size Redux is a fork of Folder Size for Windows 2.6, maintained by Laurent LaSalle."
+msgstr ""
+
+msgctxt "about.original"
+msgid "Folder Size for Windows was conceived, architected, and implemented by Brian Oraas."
+msgstr "Folder Size för Windows uppfanns, planerades och implementerades av Brian Oraas."
+
+#. Button opening the list of contributors. & marks the access key.
+msgctxt "about.credits"
+msgid "&Credits"
+msgstr ""
+
+msgctxt "about.license"
+msgid "License"
+msgstr "Licens"
+
+#. Link.
+msgctxt "about.gpl"
+msgid "Folder Size for Windows may be distributed under the terms of the GNU General Public License."
+msgstr "Folder Size för Windows får distribueras fritt under GNU General Public License."
+
+#. Link.
+msgctxt "about.gnu"
+msgid "Find out more about GNU here."
+msgstr "Få reda på mer om GNU här."
+
+#. Title of the Credits window.
+msgctxt "credits.title"
+msgid "Credits"
+msgstr ""
+
+msgctxt "credits.intro"
+msgid "The following people have all contributed some of their knowledge or expertise to improve Folder Size!"
+msgstr ""
+
+msgctxt "credits.translation"
+msgid "Translation"
+msgstr ""
+
+msgctxt "credits.graphic"
+msgid "Graphic"
+msgstr ""
+
+msgctxt "credits.code"
+msgid "Code"
+msgstr ""
+
+#. Button.
+msgctxt "common.ok"
+msgid "OK"
+msgstr ""
+
+#. Tray icon menu. & marks the access key.
+msgctxt "menu.show_popups"
+msgid "Show &Folder Size popups"
+msgstr ""
+
+#. Tray icon menu. & marks the access key.
+msgctxt "menu.startup"
+msgid "Start on &Windows startup"
+msgstr ""
+
+#. Tray icon menu: opens the settings. & marks the access key.
+msgctxt "menu.settings"
+msgid "&Settings..."
+msgstr ""
+
+#. Tray icon menu. & marks the access key.
+msgctxt "menu.exit"
+msgid "E&xit"
+msgstr ""
+

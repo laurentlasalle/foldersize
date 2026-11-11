@@ -14,6 +14,12 @@
 #define SORT_NAME_MIXED    1   // by name, folders and files mixed
 #define SORT_SIZE          2   // by size, largest first
 
+#include <string>
+
+// Language of the user interface: a language code ("fr"), or empty for the language of Windows
+std::wstring LoadLanguageSetting();
+void SaveLanguageSetting(const std::wstring& code);
+
 int LoadDefaultSort();
 void SaveDefaultSort(int sort);
 int LoadScanDriveTypes();

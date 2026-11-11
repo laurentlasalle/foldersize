@@ -2,7 +2,6 @@
 // Microsoft Visual C++ generated include file.
 // Used by FolderSizeService.rc
 //
-#define IDS_SERVICE_DESCRIPTION         100
 
 // Next default values for new objects
 // 

@@ -59,12 +59,16 @@
     </ClCompile>
     <ClCompile Include="..\Common\Pipe.cpp" />
     <ClCompile Include="..\Common\Settings.cpp" />
+    <ClCompile Include="..\Common\Language.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
     <ClInclude Include="StdAfx.h" />
     <ClInclude Include="..\Common\Pipe.h" />
     <ClInclude Include="..\Common\Settings.h" />
+    <ClInclude Include="..\Common\Language.h" />
+    <ClInclude Include="..\Common\LangStrings.h" />
+    <ClInclude Include="..\Common\LangList.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Window.rc" />

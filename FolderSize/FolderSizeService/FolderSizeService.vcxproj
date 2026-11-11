@@ -91,17 +91,6 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="FolderSizeService.rc" />
-    <ResourceCompile Include="FolderSizeService_ca.rc" />
-    <ResourceCompile Include="FolderSizeService_en.rc" />
-    <ResourceCompile Include="FolderSizeService_es.rc" />
-    <ResourceCompile Include="FolderSizeService_fr.rc" />
-    <ResourceCompile Include="FolderSizeService_hu.rc" />
-    <ResourceCompile Include="FolderSizeService_it.rc" />
-    <ResourceCompile Include="FolderSizeService_ja.rc" />
-    <ResourceCompile Include="FolderSizeService_nl.rc" />
-    <ResourceCompile Include="FolderSizeService_pl.rc" />
-    <ResourceCompile Include="FolderSizeService_ru.rc" />
-    <ResourceCompile Include="FolderSizeService_sv.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

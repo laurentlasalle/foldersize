@@ -63,6 +63,26 @@ Every push is also built on GitHub Actions. The installer
 (`FolderSize64.msi`) and the program files can be downloaded from the
 run's Artifacts section on the Actions page.
 
+## Translating
+
+The texts of the program are translated with gettext files, like many other projects:
+`FolderSize/Lang/folder-size-redux.pot` holds the English texts, and each language has its
+own `.po` file next to it (`fr.po`, `de.po`, and so on). Edit them with
+[Poedit](https://poedit.net) or any `.po` editor. To add a language, copy the `.pot` file to
+`<language>.po` and add the language to the list at the top of `build_lang.py`.
+
+Windows programs can't read `.po` files directly, so `FolderSize/Lang/build_lang.py` converts
+them into Windows string tables (`FolderSize/Common/LangStrings.*`), compiled into the programs.
+Run it after changing a `.po` or `.pot` file and commit the generated files along with it:
+
+    python FolderSize/Lang/build_lang.py
+
+The build on GitHub checks that the generated files are up to date. Texts that are missing or
+marked fuzzy in a `.po` file are shown in English.
+
+By default the program uses the language of Windows when it is available, and English
+otherwise. The Language setting in the General tab of the settings chooses another language.
+
 ## License
 
 Folder Size Redux is free software, released under the GNU General Public

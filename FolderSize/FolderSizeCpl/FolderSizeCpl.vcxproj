@@ -65,6 +65,7 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\Common\Settings.cpp" />
+    <ClCompile Include="..\Common\Language.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Hyperlinks.h" />
@@ -74,23 +75,12 @@
     <ClInclude Include="Service.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="..\Common\Settings.h" />
+    <ClInclude Include="..\Common\Language.h" />
+    <ClInclude Include="..\Common\LangStrings.h" />
+    <ClInclude Include="..\Common\LangList.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="FolderSizeCpl.rc" />
-    <ResourceCompile Include="FolderSizeCpl_ca.rc" />
-    <ResourceCompile Include="FolderSizeCpl_de.rc" />
-    <ResourceCompile Include="FolderSizeCpl_en.rc" />
-    <ResourceCompile Include="FolderSizeCpl_es.rc" />
-    <ResourceCompile Include="FolderSizeCpl_fr.rc" />
-    <ResourceCompile Include="FolderSizeCpl_hu.rc" />
-    <ResourceCompile Include="FolderSizeCpl_it.rc" />
-    <ResourceCompile Include="FolderSizeCpl_ja.rc" />
-    <ResourceCompile Include="FolderSizeCpl_nl.rc" />
-    <ResourceCompile Include="FolderSizeCpl_pl.rc" />
-    <ResourceCompile Include="FolderSizeCpl_ru.rc" />
-    <ResourceCompile Include="FolderSizeCpl_sv.rc" />
-    <ResourceCompile Include="FolderSizeCpl_zh-cn.rc" />
-    <ResourceCompile Include="FolderSizeCpl_zh-tw.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

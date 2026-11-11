@@ -22,6 +22,25 @@ void SaveDWord(HKEY hKey, LPCTSTR lpValueName, DWORD dw)
 	RegSetValueEx(hKey, lpValueName, 0, REG_DWORD, (CONST BYTE*)&dw, sizeof(DWORD));
 }
 
+std::wstring LoadLanguageSetting()
+{
+	WCHAR szCode[32] = L"";
+	DWORD cb = sizeof(szCode);
+	if (RegGetValueW(HKEY_CURRENT_USER, USER_SETTINGS_KEY, L"Language", RRF_RT_REG_SZ, NULL, szCode, &cb) != ERROR_SUCCESS)
+		return std::wstring();
+	return szCode;
+}
+
+void SaveLanguageSetting(const std::wstring& code)
+{
+	HKEY hKey;
+	if (RegCreateKeyEx(HKEY_CURRENT_USER, USER_SETTINGS_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+	{
+		RegSetValueExW(hKey, L"Language", 0, REG_SZ, (const BYTE*)code.c_str(), (DWORD)((code.size() + 1) * sizeof(WCHAR)));
+		RegCloseKey(hKey);
+	}
+}
+
 int LoadDefaultSort()
 {
 	int sort = SORT_NAME;

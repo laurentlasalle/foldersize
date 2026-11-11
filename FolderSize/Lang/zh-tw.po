@@ -1,0 +1,254 @@
+# Folder Size Redux translation: zh-tw
+# This file is distributed under the same license as Folder Size Redux (GNU GPL v2).
+msgid ""
+msgstr ""
+"Project-Id-Version: Folder Size Redux\n"
+"Language: zh-tw\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Name of the program (Control Panel item, window titles).
+msgctxt "app.name"
+msgid "Folder Size Redux"
+msgstr ""
+
+#. Description of the item in Control Panel.
+#, fuzzy
+msgctxt "app.info"
+msgid "Choose which drives Folder Size Redux scans and control its background service."
+msgstr "Customize the Explorer Folder Size column and control the Folder Size service."
+
+#. Title of the first tab of the settings.
+msgctxt "tab.general"
+msgid "General"
+msgstr "顯示"
+
+#. Group of check boxes choosing the types of drives the service scans.
+msgctxt "general.drive_types"
+msgid "Drive types to scan"
+msgstr ""
+
+#. Check box. & marks the access key.
+msgctxt "general.drive_hard"
+msgid "&Hard drives"
+msgstr ""
+
+#. Check box. & marks the access key.
+msgctxt "general.drive_removable"
+msgid "&Removable storage"
+msgstr ""
+
+#. Check box. & marks the access key.
+msgctxt "general.drive_cd"
+msgid "CD/&DVD drives"
+msgstr ""
+
+#. Check box. & marks the access key.
+msgctxt "general.drive_network"
+msgid "&Network shares"
+msgstr ""
+
+#. Group choosing the order of the list when a window opens.
+msgctxt "general.default_sort"
+msgid "Default sort"
+msgstr ""
+
+#. Group with the list of languages of the program.
+msgctxt "general.language"
+msgid "Language"
+msgstr ""
+
+#. First choice of the language list: use the language of Windows.
+msgctxt "general.language_system"
+msgid "System default"
+msgstr ""
+
+#. Sort order and column header: by name, folders first.
+msgctxt "sort.name"
+msgid "Name"
+msgstr ""
+
+#. Sort order and column header: by name, folders and files mixed.
+msgctxt "sort.name_mixed"
+msgid "Name (mixed)"
+msgstr ""
+
+#. Sort order and column header: by size, largest first.
+msgctxt "sort.size"
+msgid "Size"
+msgstr ""
+
+#. Title of the tab controlling the background service.
+msgctxt "tab.service"
+msgid "Service"
+msgstr "系統功能"
+
+#. Label followed by the state of the service.
+msgctxt "service.status_label"
+msgid "Service status:"
+msgstr "功能運作:"
+
+#. Button. & marks the access key.
+msgctxt "service.start"
+msgid "&Start"
+msgstr "起動"
+
+#. Button. & marks the access key.
+msgctxt "service.stop"
+msgid "S&top"
+msgstr "停止"
+
+#. Button. & marks the access key.
+msgctxt "service.pause"
+msgid "&Pause"
+msgstr "暫停"
+
+#. Button. & marks the access key.
+msgctxt "service.resume"
+msgid "&Resume"
+msgstr "繼續"
+
+msgctxt "service.admin_note"
+msgid "You must have Administrator privileges to modify the service."
+msgstr ""
+
+msgctxt "service.start_info"
+msgid "While the service is running, a Folder Size cache is in memory and monitoring your folders."
+msgstr "當功能起動後, 檔案夾容量將會隨時更新並記錄所有檔案夾容量資料."
+
+msgctxt "service.stop_info"
+msgid "When the service is stopped, folder size information is not available in Explorer."
+msgstr "當功能停止後, 檔案夾容量將會停止監察並且不會更新所有檔案夾容量資料."
+
+msgctxt "service.pause_info"
+msgid "Pause the background scanning to free disk bandwidth."
+msgstr "暫停功能可停止更新及記錄, 可於有需要時加快硬碟運作速度."
+
+msgctxt "service.resume_info"
+msgid "Resume to keep the cache updated."
+msgstr "繼續功能可繼續隨時更新並記錄所有檔案夾容量資料."
+
+#. State of the service.
+msgctxt "service.state_running"
+msgid "Running"
+msgstr "正常運作"
+
+#. State of the service.
+msgctxt "service.state_stopped"
+msgid "Stopped"
+msgstr ""
+
+#. State of the service.
+msgctxt "service.state_unknown"
+msgid "Unknown"
+msgstr ""
+
+#. State of the service.
+msgctxt "service.state_paused"
+msgid "Paused"
+msgstr ""
+
+#. State of the service.
+msgctxt "service.state_starting"
+msgid "Starting"
+msgstr ""
+
+#. State of the service.
+msgctxt "service.state_stopping"
+msgid "Stopping"
+msgstr ""
+
+#. State of the service.
+msgctxt "service.state_resuming"
+msgid "Resuming"
+msgstr ""
+
+#. State of the service.
+msgctxt "service.state_pausing"
+msgid "Pausing"
+msgstr ""
+
+#. Description of the service in the Services console.
+msgctxt "service.description"
+msgid "Caches the sizes of all folders viewed in Explorer. The service monitors folders for changes and updates the cache in the background."
+msgstr ""
+
+#. Title of the About tab.
+msgctxt "tab.about"
+msgid "About"
+msgstr "關於"
+
+msgctxt "about.fork"
+msgid "Folder Size Redux is a fork of Folder Size for Windows 2.6, maintained by Laurent LaSalle."
+msgstr ""
+
+msgctxt "about.original"
+msgid "Folder Size for Windows was conceived, architected, and implemented by Brian Oraas."
+msgstr "顯示檔案夾容量是由 Brian Oraas 構想, 設計及完成."
+
+#. Button opening the list of contributors. & marks the access key.
+msgctxt "about.credits"
+msgid "&Credits"
+msgstr ""
+
+msgctxt "about.license"
+msgid "License"
+msgstr "版權"
+
+#. Link.
+msgctxt "about.gpl"
+msgid "Folder Size for Windows may be distributed under the terms of the GNU General Public License."
+msgstr "顯示檔案夾容量是跟據 GNU Public 版權保護下進行發行."
+
+#. Link.
+msgctxt "about.gnu"
+msgid "Find out more about GNU here."
+msgstr "點一下這裡了解更多有關 GNU 的資訊."
+
+#. Title of the Credits window.
+msgctxt "credits.title"
+msgid "Credits"
+msgstr ""
+
+msgctxt "credits.intro"
+msgid "The following people have all contributed some of their knowledge or expertise to improve Folder Size!"
+msgstr ""
+
+msgctxt "credits.translation"
+msgid "Translation"
+msgstr ""
+
+msgctxt "credits.graphic"
+msgid "Graphic"
+msgstr ""
+
+msgctxt "credits.code"
+msgid "Code"
+msgstr ""
+
+#. Button.
+msgctxt "common.ok"
+msgid "OK"
+msgstr ""
+
+#. Tray icon menu. & marks the access key.
+msgctxt "menu.show_popups"
+msgid "Show &Folder Size popups"
+msgstr ""
+
+#. Tray icon menu. & marks the access key.
+msgctxt "menu.startup"
+msgid "Start on &Windows startup"
+msgstr ""
+
+#. Tray icon menu: opens the settings. & marks the access key.
+msgctxt "menu.settings"
+msgid "&Settings..."
+msgstr ""
+
+#. Tray icon menu. & marks the access key.
+msgctxt "menu.exit"
+msgid "E&xit"
+msgstr ""
+

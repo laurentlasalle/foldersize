@@ -1,6 +1,7 @@
 #include "StdAfx.h"
 #include "PropSheet.h"
 #include "Resource.h"
+#include "../Common/LangStrings.h"
 
 HINSTANCE g_hInstance = NULL;
 
@@ -27,8 +28,8 @@ LONG APIENTRY CPlApplet(HWND hwndCPl, UINT uMsg, LPARAM lParam1, LPARAM lParam2)
 		{
 			LPCPLINFO pInfo = (LPCPLINFO)lParam2;
 			pInfo->idIcon = IDI_ICON;
-			pInfo->idName = IDS_NAME;
-			pInfo->idInfo = IDS_INFO;
+			pInfo->idName = STR_APP_NAME;  // loaded by Control Panel, in the language of Windows
+			pInfo->idInfo = STR_APP_INFO;
 			pInfo->lData = NULL;
 			return 0;
 		}
@@ -40,8 +41,8 @@ LONG APIENTRY CPlApplet(HWND hwndCPl, UINT uMsg, LPARAM lParam1, LPARAM lParam2)
 			LPNEWCPLINFO pInfo = (LPNEWCPLINFO)lParam2;
 			pInfo->dwSize = sizeof(NEWCPLINFO);
 			pInfo->lData = NULL;
-			LoadString(g_hInstance, IDS_NAME, pInfo->szName, countof(pInfo->szName));
-			LoadString(g_hInstance, IDS_INFO, pInfo->szInfo, countof(pInfo->szInfo));
+			LoadString(g_hInstance, STR_APP_NAME, pInfo->szName, countof(pInfo->szName));
+			LoadString(g_hInstance, STR_APP_INFO, pInfo->szInfo, countof(pInfo->szInfo));
 			pInfo->hIcon = NULL;
 			if (SUCCEEDED(CoInitialize(NULL)))
 			{

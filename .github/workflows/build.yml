@@ -13,6 +13,10 @@ jobs:
 
       - uses: microsoft/setup-msbuild@v2
 
+      - name: Check that the translations are up to date
+        shell: pwsh
+        run: python FolderSize/Lang/build_lang.py --check
+
       - name: Build (Release x64)
         shell: pwsh
         run: |

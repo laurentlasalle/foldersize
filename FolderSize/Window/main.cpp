@@ -1,6 +1,7 @@
 #include "StdAfx.h"
 #include "resource.h"
 #include "..\\Common\\Settings.h"
+#include "..\\Common\\Language.h"
 
 #define WM_NOTIFYICON (WM_APP + 1)
 #define WM_KILLWINDOW (WM_APP + 2)
@@ -551,6 +552,9 @@ static HWND FindTabWindow(HWND hwnd)
 
 static PFNLVCOMPARE GetCompareFunction(int sort);
 
+// Broadcast by the control panel when settings are applied (see SETTINGS_CHANGED_MESSAGE).
+static const UINT WM_SETTINGSCHANGED = RegisterWindowMessage(SETTINGS_CHANGED_MESSAGE);
+
 class FSWindow :
 	public CWindowImpl<FSWindow, CWindow, CWinTraits<WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX, WS_EX_TOOLWINDOW> >,
 	public IDispEventSimpleImpl<1, FSWindow, &DIID_DWebBrowserEvents2>,
@@ -572,6 +576,7 @@ BEGIN_MSG_MAP(FSWindow)
 	MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBkgnd)
 	MESSAGE_HANDLER(WM_DPICHANGED, OnDpiChanged)
 	MESSAGE_HANDLER(WM_SETTINGCHANGE, OnSettingChange)
+	MESSAGE_HANDLER(WM_SETTINGSCHANGED, OnSettingsChanged)
 	MESSAGE_HANDLER(WM_NEWITEMS, OnNewItems)
 	MESSAGE_HANDLER(WM_REFRESHITEMS, OnRefreshItems)
 	MESSAGE_HANDLER(WM_ENUMDONE, OnEnumDone)
@@ -589,6 +594,7 @@ END_MSG_MAP()
 	LRESULT OnEraseBkgnd(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnSettingsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -776,6 +782,15 @@ void FSWindow::ApplyTheme()
 }
 
 // Windows broadcasts "ImmersiveColorSet" when the app mode (light/dark) changes.
+// The settings were changed in the control panel: show the texts in the new language.
+LRESULT FSWindow::OnSettingsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	RefreshUiLanguage();
+	ApplySort();
+	AdjustSizeForList();
+	return 0;
+}
+
 LRESULT FSWindow::OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
 	if (lParam && lstrcmp((LPCTSTR)lParam, _T("ImmersiveColorSet")) == 0)
@@ -799,8 +814,12 @@ void FSWindow::ApplySort()
 
 	LVCOLUMN column;
 	column.mask = LVCF_TEXT;
-	column.pszText = m_sort == SORT_NAME_MIXED ? _T("Name (mixed)") : _T("Name");
+	std::wstring name = Tr(m_sort == SORT_NAME_MIXED ? STR_SORT_NAME_MIXED : STR_SORT_NAME);
+	column.pszText = (LPTSTR)name.c_str();
 	ListView_SetColumn(m_lv, 0, &column);
+	std::wstring size = Tr(STR_SORT_SIZE) + L" ";  // trailing space: see FormatFolderInfoBuffer
+	column.pszText = (LPTSTR)size.c_str();
+	ListView_SetColumn(m_lv, 1, &column);
 
 	// The arrow is drawn by ListViewSubclassProc (see DrawSortArrow), not with HDF_SORTUP/DOWN.
 	m_headerState.sortedColumn = m_sort == SORT_SIZE ? 1 : 0;
@@ -1637,6 +1656,24 @@ LRESULT ShellWindowManager::OnAppIconMsg(UINT uMsg, WPARAM wParam, LPARAM lParam
 			AllowDarkMenus();
 			HMENU hMenu = LoadMenu((HINSTANCE)GetWindowLongPtr(GWLP_HINSTANCE), MAKEINTRESOURCE(IDR_MENU));
 			HMENU hSubMenu = GetSubMenu(hMenu, 0);
+
+			// Menu texts in the user interface language. This window doesn't receive the
+			// settings broadcast (it's a message-only window), so read the language here.
+			RefreshUiLanguage();
+			const struct { UINT nID; UINT nStrID; } menuTexts[] = {
+				{ ID_SHOW, STR_MENU_SHOW_POPUPS },
+				{ ID_START, STR_MENU_STARTUP },
+				{ ID_SETTINGS, STR_MENU_SETTINGS },
+				{ ID_EXIT, STR_MENU_EXIT },
+			};
+			for (size_t i = 0; i < sizeof(menuTexts) / sizeof(menuTexts[0]); i++)
+			{
+				std::wstring text = Tr(menuTexts[i].nStrID);
+				MENUITEMINFO miiText = { sizeof(miiText) };
+				miiText.fMask = MIIM_STRING;
+				miiText.dwTypeData = (LPTSTR)text.c_str();
+				SetMenuItemInfo(hSubMenu, menuTexts[i].nID, FALSE, &miiText);
+			}
 			MENUITEMINFO mii = { sizeof(mii) };
 			mii.fMask = MIIM_STATE;
 			mii.fState = MFS_DEFAULT;

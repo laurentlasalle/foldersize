@@ -3,11 +3,13 @@
 #include "FolderSizeSvc.h"
 #include "Pipe.h"
 #include "Resource.h"
+#include "..\Common\LangStrings.h"
 
 void RegisterServiceDescription(SC_HANDLE hService)
 {
 	TCHAR szDescription[1024];
-	LoadString(GetModuleHandle(NULL), IDS_SERVICE_DESCRIPTION, szDescription, 1024);
+	// In the language of Windows (string tables generated from the .po files in Lang)
+	LoadString(GetModuleHandle(NULL), STR_SERVICE_DESCRIPTION, szDescription, 1024);
 	SERVICE_DESCRIPTION sd;
 	sd.lpDescription = szDescription;
 	ChangeServiceConfig2(hService, SERVICE_CONFIG_DESCRIPTION, &sd);

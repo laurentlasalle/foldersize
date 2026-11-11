@@ -1,6 +1,7 @@
 // Microsoft Visual C++ generated resource script.
 //
 #include "resource.h"
+#include "..\Common\LangStrings.h"
 
 #define APSTUDIO_READONLY_SYMBOLS
 /////////////////////////////////////////////////////////////////////////////
@@ -73,6 +74,83 @@ BEGIN
     END
 END
 
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialogs
+//
+// One layout for all languages. The texts below are the English ones; at run time each text is
+// replaced by its translation (see TranslateDialog in PropSheet.cpp and the .po files in Lang).
+// Controls are sized for the longest translations.
+//
+
+IDD_GENERAL DIALOGEX 0, 0, 212, 218
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "General"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Drive types to scan",IDC_DRIVE_TYPES_GROUP,7,7,198,51
+    CONTROL         "&Hard drives",IDC_DISPLAY_LOCAL,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,17,23,88,10
+    CONTROL         "&Removable storage",IDC_DISPLAY_REMOVABLE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,109,23,92,10
+    CONTROL         "CD/&DVD drives",IDC_DISPLAY_CD,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,17,39,88,10
+    CONTROL         "&Network shares",IDC_DISPLAY_NETWORK,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,109,39,92,10
+    GROUPBOX        "Default sort",IDC_DEFAULT_SORT_GROUP,7,64,198,58
+    CONTROL         "Name",IDC_SORT_NAME,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,17,79,180,10
+    CONTROL         "Name (mixed)",IDC_SORT_NAME_MIXED,"Button",BS_AUTORADIOBUTTON,17,93,180,10
+    CONTROL         "Size",IDC_SORT_SIZE,"Button",BS_AUTORADIOBUTTON,17,107,180,10
+    GROUPBOX        "Language",IDC_LANGUAGE_GROUP,7,128,198,36
+    COMBOBOX        IDC_LANGUAGE,17,143,180,120,CBS_DROPDOWNLIST | WS_VSCROLL | WS_GROUP | WS_TABSTOP
+END
+
+IDD_SERVICE DIALOGEX 0, 0, 212, 218
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Service"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Service status:",IDC_SERVICE_STATUS_LABEL,7,7,70,10
+    LTEXT           "",IDC_SERVICE_STATUS,80,7,125,10
+    PUSHBUTTON      "&Start",IDC_SERVICE_START,7,22,55,14
+    LTEXT           "While the service is running, a Folder Size cache is in memory and monitoring your folders.",IDC_SERVICE_START_INFO,68,22,137,34
+    PUSHBUTTON      "S&top",IDC_SERVICE_STOP,7,60,55,14
+    LTEXT           "When the service is stopped, folder size information is not available in Explorer.",IDC_SERVICE_STOP_INFO,68,60,137,30
+    PUSHBUTTON      "&Pause",IDC_SERVICE_PAUSE,7,94,55,14
+    LTEXT           "Pause the background scanning to free disk bandwidth.",IDC_SERVICE_PAUSE_INFO,68,94,137,43
+    PUSHBUTTON      "&Resume",IDC_SERVICE_RESUME,7,141,55,14
+    LTEXT           "Resume to keep the cache updated.",IDC_SERVICE_RESUME_INFO,68,141,137,34
+    ICON            "",IDC_SERVICE_INFOICON,37,180,20,20
+    LTEXT           "You must have Administrator privileges to modify the service.",IDC_SERVICE_ADMIN_NOTE,68,180,137,29
+END
+
+IDD_ABOUT DIALOGEX 0, 0, 212, 218
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "About"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Folder Size Redux 0.1",IDC_TITLE,7,7,198,22,WS_TABSTOP
+    LTEXT           "Folder Size for Windows was conceived, architected, and implemented by Brian Oraas.",IDC_ABOUT_ORIGINAL,7,38,110,42
+    CONTROL         IDB_BRIO,IDC_PIC_BRIO,"Static",SS_BITMAP | SS_CENTERIMAGE | WS_TABSTOP,133,38,72,79,WS_EX_CLIENTEDGE
+    PUSHBUTTON      "&Credits",IDC_CREDITS,7,84,55,14
+    LTEXT           "Folder Size Redux is a fork of Folder Size for Windows 2.6, maintained by Laurent LaSalle.",IDC_ABOUT_FORK,7,104,120,26
+    GROUPBOX        "License",IDC_LICENSE_GROUP,7,136,198,66
+    LTEXT           "Folder Size for Windows may be distributed under the terms of the GNU General Public License.",IDC_HYPER_GPL,17,150,183,26
+    LTEXT           "Find out more about GNU here.",IDC_HYPER_GNU,17,180,183,17,WS_TABSTOP
+END
+
+IDD_CREDITS DIALOGEX 0, 0, 323, 160
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Credits"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    ICON            "",IDC_FOLDERSIZEICON,7,7,21,20
+    LTEXT           "The following people have all contributed some of their knowledge or expertise to improve Folder Size!",IDC_CREDITS_INTRO,53,7,263,18
+    GROUPBOX        "Translation",IDC_CREDITS_TRANSLATION,53,27,172,126
+    LTEXT           "",IDC_TRANSLATORS,61,40,160,107,SS_NOPREFIX
+    GROUPBOX        "Graphic",IDC_CREDITS_GRAPHIC,232,29,84,29
+    LTEXT           "Christian Helmrich",IDC_STATIC,240,41,70,8
+    GROUPBOX        "Code",IDC_CREDITS_CODE,232,66,84,37
+    LTEXT           "Kirill Müller\nMarkus Cozowicz",IDC_STATIC,240,78,70,23
+    DEFPUSHBUTTON   "OK",IDOK,266,139,50,14
+END
+
 #endif    // Neutral resources
 /////////////////////////////////////////////////////////////////////////////
 
@@ -105,8 +183,9 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 #ifndef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
 //
-// Generated from the TEXTINCLUDE 3 resource.
+// Translated texts, one string table per language (generated by Lang/build_lang.py)
 //
+#include "..\Common\LangStrings.rc"
 
 
 /////////////////////////////////////////////////////////////////////////////

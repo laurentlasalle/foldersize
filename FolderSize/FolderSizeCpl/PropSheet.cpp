@@ -7,20 +7,82 @@
 #include "Hyperlinks.h"
 #include "Service.h"
 #include "../Common/Settings.h"
+#include "../Common/Language.h"
+
+// Pairs of a control and its text, to translate a dialog (see TranslateDialog).
+struct DialogText
+{
+	int nCtrlID;
+	UINT nStrID;
+};
+#define countof_texts(a) (sizeof(a) / sizeof((a)[0]))
+
+// Replaces the English texts of a dialog's controls with their translation. The dialogs have a
+// single layout for all languages (FolderSizeCpl.rc); only the texts change.
+static void TranslateDialog(HWND hwndDlg, const DialogText* pTexts, size_t nTexts)
+{
+	for (size_t i = 0; i < nTexts; i++)
+		SetDlgItemText(hwndDlg, pTexts[i].nCtrlID, Tr(pTexts[i].nStrID).c_str());
+}
+
+static const DialogText g_GeneralTexts[] =
+{
+	{ IDC_DRIVE_TYPES_GROUP, STR_GENERAL_DRIVE_TYPES },
+	{ IDC_DISPLAY_LOCAL, STR_GENERAL_DRIVE_HARD },
+	{ IDC_DISPLAY_REMOVABLE, STR_GENERAL_DRIVE_REMOVABLE },
+	{ IDC_DISPLAY_CD, STR_GENERAL_DRIVE_CD },
+	{ IDC_DISPLAY_NETWORK, STR_GENERAL_DRIVE_NETWORK },
+	{ IDC_DEFAULT_SORT_GROUP, STR_GENERAL_DEFAULT_SORT },
+	{ IDC_SORT_NAME, STR_SORT_NAME },
+	{ IDC_SORT_NAME_MIXED, STR_SORT_NAME_MIXED },
+	{ IDC_SORT_SIZE, STR_SORT_SIZE },
+	{ IDC_LANGUAGE_GROUP, STR_GENERAL_LANGUAGE },
+};
+
+static const DialogText g_ServiceTexts[] =
+{
+	{ IDC_SERVICE_STATUS_LABEL, STR_SERVICE_STATUS_LABEL },
+	{ IDC_SERVICE_START, STR_SERVICE_START },
+	{ IDC_SERVICE_STOP, STR_SERVICE_STOP },
+	{ IDC_SERVICE_PAUSE, STR_SERVICE_PAUSE },
+	{ IDC_SERVICE_RESUME, STR_SERVICE_RESUME },
+	{ IDC_SERVICE_START_INFO, STR_SERVICE_START_INFO },
+	{ IDC_SERVICE_STOP_INFO, STR_SERVICE_STOP_INFO },
+	{ IDC_SERVICE_PAUSE_INFO, STR_SERVICE_PAUSE_INFO },
+	{ IDC_SERVICE_RESUME_INFO, STR_SERVICE_RESUME_INFO },
+	{ IDC_SERVICE_ADMIN_NOTE, STR_SERVICE_ADMIN_NOTE },
+};
+
+static const DialogText g_AboutTexts[] =
+{
+	{ IDC_ABOUT_ORIGINAL, STR_ABOUT_ORIGINAL },
+	{ IDC_CREDITS, STR_ABOUT_CREDITS },
+	{ IDC_ABOUT_FORK, STR_ABOUT_FORK },
+	{ IDC_LICENSE_GROUP, STR_ABOUT_LICENSE },
+	{ IDC_HYPER_GPL, STR_ABOUT_GPL },
+	{ IDC_HYPER_GNU, STR_ABOUT_GNU },
+};
+
+static const DialogText g_CreditsTexts[] =
+{
+	{ IDC_CREDITS_INTRO, STR_CREDITS_INTRO },
+	{ IDC_CREDITS_TRANSLATION, STR_CREDITS_TRANSLATION },
+	{ IDC_CREDITS_GRAPHIC, STR_CREDITS_GRAPHIC },
+	{ IDC_CREDITS_CODE, STR_CREDITS_CODE },
+	{ IDOK, STR_COMMON_OK },
+};
 
 void DisplayError(HWND hwnd, DWORD dwError)
 {
 	LPTSTR pszMessage;
 	if (FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER|FORMAT_MESSAGE_FROM_SYSTEM, NULL, dwError, 0, (LPTSTR)&pszMessage, 0, NULL))
 	{
-		TCHAR szTitle[256];
-		LoadString(g_hInstance, IDS_NAME, szTitle, 256);
-		MessageBox(hwnd, pszMessage, szTitle, MB_OK|MB_ICONSTOP);
+		MessageBox(hwnd, pszMessage, Tr(STR_APP_NAME).c_str(), MB_OK|MB_ICONSTOP);
 		LocalFree(pszMessage);
 	}
 }
 
-INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK GeneralProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	switch (uMsg)
 	{
@@ -31,6 +93,21 @@ INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			HICON hSmallIcon = (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_ICON), IMAGE_ICON,
 					GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED);
 			SendMessage(GetParent(hwndDlg), WM_SETICON, ICON_SMALL, (LPARAM)hSmallIcon);
+
+			TranslateDialog(hwndDlg, g_GeneralTexts, countof_texts(g_GeneralTexts));
+
+			// languages: the language of Windows first, then each language by its own name
+			HWND hwndLanguage = GetDlgItem(hwndDlg, IDC_LANGUAGE);
+			SendMessage(hwndLanguage, CB_ADDSTRING, 0, (LPARAM)Tr(STR_GENERAL_LANGUAGE_SYSTEM).c_str());
+			std::wstring language = LoadLanguageSetting();
+			int selected = 0;
+			for (int i = 0; i < GetLanguageCount(); i++)
+			{
+				SendMessage(hwndLanguage, CB_ADDSTRING, 0, (LPARAM)GetLanguageInfo(i).name);
+				if (language == GetLanguageInfo(i).code)
+					selected = i + 1;
+			}
+			SendMessage(hwndLanguage, CB_SETCURSEL, selected, 0);
 
 			// load the drive type options
 			int DriveTypes = LoadScanDriveTypes();
@@ -57,6 +134,10 @@ INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 		case IDC_SORT_SIZE:
 			PropSheet_Changed(GetParent(hwndDlg), hwndDlg);
 			break;
+		case IDC_LANGUAGE:
+			if (HIWORD(wParam) == CBN_SELCHANGE)
+				PropSheet_Changed(GetParent(hwndDlg), hwndDlg);
+			break;
 		}
 		break;
 	case WM_NOTIFY:
@@ -72,6 +153,16 @@ INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 					SaveDefaultSort(SORT_NAME_MIXED);
 				else
 					SaveDefaultSort(SORT_NAME);
+
+				// language: the first choice is the language of Windows (empty setting)
+				{
+					int selected = (int)SendDlgItemMessage(hwndDlg, IDC_LANGUAGE, CB_GETCURSEL, 0, 0);
+					SaveLanguageSetting(selected > 0 ? GetLanguageInfo(selected - 1).code : L"");
+				}
+
+				// Tell the running Folder Size windows, so they pick up the new language. The
+				// settings panel itself shows the new language the next time it is opened.
+				PostMessage(HWND_BROADCAST, RegisterWindowMessage(SETTINGS_CHANGED_MESSAGE), 0, 0);
 
 				int DriveTypes = 0;
 				if (IsDlgButtonChecked(hwndDlg, IDC_DISPLAY_LOCAL) == BST_CHECKED)
@@ -116,23 +207,21 @@ typedef struct
 
 SERVER_STATE g_ServerStateLookup[] =
 {
-	{IDS_SERVICE_UNKNOWN, FALSE, FALSE, FALSE, FALSE},
-	{IDS_SERVICE_STOPPED, TRUE, FALSE, FALSE, FALSE},
-	{IDS_SERVICE_START_PENDING, FALSE, TRUE, FALSE, FALSE},
-	{IDS_SERVICE_STOP_PENDING, FALSE, FALSE, FALSE, FALSE},
-	{IDS_SERVICE_RUNNING, FALSE, TRUE, TRUE, FALSE},
-	{IDS_SERVICE_CONTINUE_PENDING, FALSE, FALSE, FALSE, FALSE},
-	{IDS_SERVICE_PAUSE_PENDING, FALSE, FALSE, FALSE, FALSE},
-	{IDS_SERVICE_PAUSED, FALSE, TRUE, FALSE, TRUE}
+	{STR_SERVICE_STATE_UNKNOWN, FALSE, FALSE, FALSE, FALSE},
+	{STR_SERVICE_STATE_STOPPED, TRUE, FALSE, FALSE, FALSE},
+	{STR_SERVICE_STATE_STARTING, FALSE, TRUE, FALSE, FALSE},
+	{STR_SERVICE_STATE_STOPPING, FALSE, FALSE, FALSE, FALSE},
+	{STR_SERVICE_STATE_RUNNING, FALSE, TRUE, TRUE, FALSE},
+	{STR_SERVICE_STATE_RESUMING, FALSE, FALSE, FALSE, FALSE},
+	{STR_SERVICE_STATE_PAUSING, FALSE, FALSE, FALSE, FALSE},
+	{STR_SERVICE_STATE_PAUSED, FALSE, TRUE, FALSE, TRUE}
 };
 
 void UpdateServiceStatus(HWND hwndDlg)
 {
 	DWORD dwStatus = GetServiceStatus();
 
-	TCHAR szStatus[256];
-	LoadString(g_hInstance, g_ServerStateLookup[dwStatus].nNameID, szStatus, countof(szStatus));
-	SetDlgItemText(hwndDlg, IDC_SERVICE_STATUS, szStatus);
+	SetDlgItemText(hwndDlg, IDC_SERVICE_STATUS, Tr(g_ServerStateLookup[dwStatus].nNameID).c_str());
 	EnableWindow(GetDlgItem(hwndDlg, IDC_SERVICE_START), g_ServerStateLookup[dwStatus].bEnableStart);
 	EnableWindow(GetDlgItem(hwndDlg, IDC_SERVICE_STOP), g_ServerStateLookup[dwStatus].bEnableStop);
 	EnableWindow(GetDlgItem(hwndDlg, IDC_SERVICE_PAUSE), g_ServerStateLookup[dwStatus].bEnablePause);
@@ -183,6 +272,7 @@ INT_PTR CALLBACK ServiceProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			// set the info icon
 			HICON hIcon = LoadIcon(NULL, IDI_INFORMATION);
 			SendMessage(GetDlgItem(hwndDlg, IDC_SERVICE_INFOICON), STM_SETICON, (WPARAM)hIcon, 0);
+			TranslateDialog(hwndDlg, g_ServiceTexts, countof_texts(g_ServiceTexts));
 			return TRUE;
 		}
 
@@ -237,6 +327,8 @@ INT_PTR CALLBACK CreditsProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			// let's use the biggest and best icon available, instead of the default 32 pixel size
 			HICON hIcon = (HICON)LoadImage(g_hInstance, MAKEINTRESOURCE(IDI_ICON), IMAGE_ICON, 48, 48, 0);
 			SendDlgItemMessage(hwndDlg, IDC_FOLDERSIZEICON, STM_SETICON, (WPARAM)hIcon, 0);
+			TranslateDialog(hwndDlg, g_CreditsTexts, countof_texts(g_CreditsTexts));
+			SetWindowText(hwndDlg, Tr(STR_CREDITS_TITLE).c_str());
 
 			SetDlgItemText(hwndDlg, IDC_TRANSLATORS,
 				TEXT("Bruce Pimenta (German)\n")
@@ -270,6 +362,7 @@ INT_PTR CALLBACK AboutProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 	{
 	case WM_INITDIALOG:
 		{
+			TranslateDialog(hwndDlg, g_AboutTexts, countof_texts(g_AboutTexts));
 			SetBiggerFont(GetDlgItem(hwndDlg, IDC_TITLE));
 
 			ConvertStaticToHyperlink(hwndDlg, IDC_TITLE);
@@ -317,27 +410,36 @@ void DoPropertySheet(HWND hwndParent)
 	PROPSHEETPAGE psp[3];
 	int i=0;
 
+	// translated texts; they must stay valid until PropertySheet returns
+	std::wstring titleGeneral = Tr(STR_TAB_GENERAL);
+	std::wstring titleService = Tr(STR_TAB_SERVICE);
+	std::wstring titleAbout = Tr(STR_TAB_ABOUT);
+	std::wstring caption = Tr(STR_APP_NAME);
+
 	psp[i].dwSize = sizeof(PROPSHEETPAGE);
-	psp[i].dwFlags = PSP_DEFAULT;
+	psp[i].dwFlags = PSP_USETITLE;
 	psp[i].hInstance = g_hInstance;
-	psp[i].pszTemplate = MAKEINTRESOURCE(IDD_DISPLAY);
-	psp[i].pfnDlgProc = DisplayProc;
+	psp[i].pszTemplate = MAKEINTRESOURCE(IDD_GENERAL);
+	psp[i].pfnDlgProc = GeneralProc;
+	psp[i].pszTitle = titleGeneral.c_str();
 	psp[i].lParam = 0;
 	i++;
 
 	psp[i].dwSize = sizeof(PROPSHEETPAGE);
-	psp[i].dwFlags = PSP_DEFAULT;
+	psp[i].dwFlags = PSP_USETITLE;
 	psp[i].hInstance = g_hInstance;
 	psp[i].pszTemplate = MAKEINTRESOURCE(IDD_SERVICE);
 	psp[i].pfnDlgProc = ServiceProc;
+	psp[i].pszTitle = titleService.c_str();
 	psp[i].lParam = 0;
 	i++;
 
 	psp[i].dwSize = sizeof(PROPSHEETPAGE);
-	psp[i].dwFlags = PSP_DEFAULT;
+	psp[i].dwFlags = PSP_USETITLE;
 	psp[i].hInstance = g_hInstance;
 	psp[i].pszTemplate = MAKEINTRESOURCE(IDD_ABOUT);
 	psp[i].pfnDlgProc = AboutProc;
+	psp[i].pszTitle = titleAbout.c_str();
 	psp[i].lParam = 0;
 	i++;
 
@@ -345,7 +447,7 @@ void DoPropertySheet(HWND hwndParent)
 	psh.dwFlags = PSH_NOCONTEXTHELP | PSH_PROPSHEETPAGE | PSH_PROPTITLE;
 	psh.hwndParent = hwndParent;
 	psh.hInstance = g_hInstance;
-	psh.pszCaption = MAKEINTRESOURCE(IDS_NAME);
+	psh.pszCaption = caption.c_str();
 	psh.nPages = i;
 	psh.nStartPage = 0;
 	psh.ppsp = psp;
