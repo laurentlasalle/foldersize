@@ -443,9 +443,8 @@ static const int LIST_MARGIN_X_DIP = 3;
 // left edge and "Name".
 static const int SIZE_COLUMN_EXTRA_DIP = 3;
 
-// Width of an empty last column, in DIPs. The list leaves almost no space at the right of a
-// right-aligned column, so without it the sizes would touch the scroll bar.
-static const int SIZE_COLUMN_RIGHT_PADDING_DIP = 3;
+// Space between a column separator and the sort arrow drawn in the header, in DIPs.
+static const int SORT_ARROW_MARGIN_DIP = 7;
 
 // Delay before reloading the folder after a change notification, in milliseconds. Changes
 // often come in bursts (moving many files); they are handled together after the burst.
@@ -457,13 +456,46 @@ static const UINT_PTR RELOAD_TIMER_ID = 1;
 static const COLORREF DARK_BACKGROUND = RGB(0x19, 0x19, 0x19);
 static const COLORREF DARK_TEXT = RGB(0xFF, 0xFF, 0xFF);
 
+// What ListViewSubclassProc needs to draw the column header.
+struct HeaderDrawState
+{
+	bool bDark;          // dark mode: light header text
+	int sortedColumn;    // column showing a sort arrow: 0 (names, arrow up) or 1 (sizes, arrow down)
+};
+
+// Draws the sort arrow of a header item. The header's own arrow is drawn centered at the top of
+// the column, as in File Explorer; this one is centered vertically, near the column separator
+// on the side opposite to the text: at the right of the name column (left-aligned text) and at
+// the left of the size column (right-aligned text). It uses the arrow image of the header's
+// theme, so it matches the light or dark style.
+static void DrawSortArrow(HWND hwndHeader, HDC hdc, const RECT& rcItem, int column)
+{
+	UINT dpi = GetDpiForWindow(hwndHeader);
+	HTHEME hTheme = OpenThemeDataForDpi(hwndHeader, L"Header", dpi);
+	if (!hTheme)
+		return;
+	int state = column == 0 ? HSAS_SORTEDUP : HSAS_SORTEDDOWN;
+	SIZE size;
+	if (SUCCEEDED(GetThemePartSize(hTheme, hdc, HP_HEADERSORTARROW, state, NULL, TS_TRUE, &size)))
+	{
+		int margin = MulDiv(SORT_ARROW_MARGIN_DIP, dpi, 96);
+		RECT rc;
+		rc.left = column == 0 ? rcItem.right - margin - size.cx : rcItem.left + margin;
+		rc.right = rc.left + size.cx;
+		rc.top = rcItem.top + (rcItem.bottom - rcItem.top - size.cy) / 2;
+		rc.bottom = rc.top + size.cy;
+		DrawThemeBackground(hTheme, hdc, HP_HEADERSORTARROW, state, &rc, NULL);
+	}
+	CloseThemeData(hTheme);
+}
+
 // Subclass of the list view: the column header sends its custom draw notifications to the
-// list view, not to our window, so the list view is subclassed to give the header a light
-// text color in dark mode (the dark header theme keeps dark text otherwise).
+// list view, not to our window, so the list view is subclassed to draw the header: a light
+// text color in dark mode (the dark header theme keeps dark text otherwise), and the sort arrow.
 static LRESULT CALLBACK ListViewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
-	const bool* pbDark = (const bool*)dwRefData;
-	if (uMsg == WM_NOTIFY && *pbDark)
+	const HeaderDrawState* pState = (const HeaderDrawState*)dwRefData;
+	if (uMsg == WM_NOTIFY)
 	{
 		LPNMHDR pnmh = (LPNMHDR)lParam;
 		if (pnmh->hwndFrom == ListView_GetHeader(hwnd) && pnmh->code == NM_CUSTOMDRAW)
@@ -473,7 +505,14 @@ static LRESULT CALLBACK ListViewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam
 				return CDRF_NOTIFYITEMDRAW;
 			if (pcd->dwDrawStage == CDDS_ITEMPREPAINT)
 			{
-				SetTextColor(pcd->hdc, DARK_TEXT);
+				if (pState->bDark)
+					SetTextColor(pcd->hdc, DARK_TEXT);
+				return CDRF_NOTIFYPOSTPAINT;
+			}
+			if (pcd->dwDrawStage == CDDS_ITEMPOSTPAINT)
+			{
+				if ((int)pcd->dwItemSpec == pState->sortedColumn)
+					DrawSortArrow(pnmh->hwndFrom, pcd->hdc, pcd->rc, pState->sortedColumn);
 				return CDRF_DODEFAULT;
 			}
 		}
@@ -587,7 +626,8 @@ private:
 	HFONT m_hFont;
 	HWND m_hwndExplorer;  // top-level File Explorer window (shared by all its tabs)
 	HWND m_hwndTab;       // the tab's own window (ShellTabWindowClass), NULL if unknown
-	bool m_bDark;         // dark mode currently applied (read by ListViewSubclassProc)
+	bool m_bDark;         // dark mode currently applied
+	HeaderDrawState m_headerState;  // read by ListViewSubclassProc
 	CComPtr<IWebBrowser2> m_pWebBrowser;
 	TCHAR m_szFolder[MAX_PATH * 4];
 	FolderViewScanner* m_pScanner;
@@ -599,7 +639,7 @@ private:
 	ULONG m_changeNotifyId;   // registration for change notifications of the folder (0 if none)
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_changeNotifyId(0)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_changeNotifyId(0)
 {
 	DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -627,7 +667,7 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 
 	ListView_SetExtendedListViewStyle(m_lv, LVS_EX_FULLROWSELECT | LVS_EX_AUTOSIZECOLUMNS | LVS_EX_DOUBLEBUFFER);
 
-	SetWindowSubclass(m_lv, ListViewSubclassProc, 0, (DWORD_PTR)&m_bDark);
+	SetWindowSubclass(m_lv, ListViewSubclassProc, 0, (DWORD_PTR)&m_headerState);
 	ApplyTheme();
 	UpdateFontForDpi();
 
@@ -637,12 +677,8 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 	column.pszText = _T("Name");
 	ListView_InsertColumn(m_lv, 0, &column);
 	column.fmt = LVCFMT_RIGHT;
-	column.pszText = _T("Size");
+	column.pszText = _T("Size ");  // trailing space: see FormatFolderInfoBuffer
 	ListView_InsertColumn(m_lv, 1, &column);
-	// Empty column used as right padding for the Size column (see SIZE_COLUMN_RIGHT_PADDING_DIP).
-	column.fmt = LVCFMT_LEFT;
-	column.pszText = _T("");
-	ListView_InsertColumn(m_lv, 2, &column);
 
 	SHFILEINFO shfi;
 	HIMAGELIST himl = (HIMAGELIST)SHGetFileInfo(_T(""), FILE_ATTRIBUTE_DIRECTORY, &shfi, sizeof(shfi), SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
@@ -709,6 +745,7 @@ LRESULT FSWindow::OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
 void FSWindow::ApplyTheme()
 {
 	m_bDark = IsDarkModeEnabled();
+	m_headerState.bDark = m_bDark;
 
 	// Title bar (documented: DWMWA_USE_IMMERSIVE_DARK_MODE, value 20)
 	BOOL bDarkTitle = m_bDark;
@@ -753,18 +790,9 @@ void FSWindow::ApplySort()
 	column.pszText = m_sort == SORT_NAME_MIXED ? _T("Name (mixed)") : _T("Name");
 	ListView_SetColumn(m_lv, 0, &column);
 
-	HWND hwndHeader = ListView_GetHeader(m_lv);
-	for (int i = 0; i < Header_GetItemCount(hwndHeader); i++)
-	{
-		HDITEM hdi = { HDI_FORMAT };
-		Header_GetItem(hwndHeader, i, &hdi);
-		hdi.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
-		if (i == 0 && m_sort != SORT_SIZE)
-			hdi.fmt |= HDF_SORTUP;
-		else if (i == 1 && m_sort == SORT_SIZE)
-			hdi.fmt |= HDF_SORTDOWN;
-		Header_SetItem(hwndHeader, i, &hdi);
-	}
+	// The arrow is drawn by ListViewSubclassProc (see DrawSortArrow), not with HDF_SORTUP/DOWN.
+	m_headerState.sortedColumn = m_sort == SORT_SIZE ? 1 : 0;
+	::InvalidateRect(ListView_GetHeader(m_lv), NULL, TRUE);
 }
 
 int FSWindow::GetListMarginX()
@@ -797,6 +825,15 @@ static void FormatFolderInfoBuffer(FOLDERINFO2& fi, LPTSTR buffer, UINT cch)
 	if (len < cch - 1 && (fi.giff == GIFF_DIRTY || fi.giff == GIFF_SCANNING))
 	{
 		buffer[len] = fi.giff == GIFF_DIRTY ? L'~' : L'+';
+		buffer[len + 1] = L'\0';
+	}
+
+	// A space at the end keeps the right-aligned sizes away from the right edge of the column
+	// (the list leaves almost no margin there). The header text "Size " ends with one too.
+	len = wcslen(buffer);
+	if (len < cch - 1)
+	{
+		buffer[len] = L' ';
 		buffer[len + 1] = L'\0';
 	}
 }
@@ -1115,10 +1152,6 @@ LRESULT FSWindow::OnColumnClick(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
 	{
 		m_sort = SORT_SIZE;
 	}
-	else
-	{
-		return 0;  // the empty padding column
-	}
 	ApplySort();
 	AdjustSizeForList();
 	return 0;
@@ -1213,7 +1246,6 @@ void FSWindow::AdjustSizeForList()
 	ListView_SetColumnWidth(m_lv, 0, LVSCW_AUTOSIZE);
 	ListView_SetColumnWidth(m_lv, 1, LVSCW_AUTOSIZE);
 	ListView_SetColumnWidth(m_lv, 1, ListView_GetColumnWidth(m_lv, 1) + MulDiv(SIZE_COLUMN_EXTRA_DIP, dpi, 96));
-	ListView_SetColumnWidth(m_lv, 2, MulDiv(SIZE_COLUMN_RIGHT_PADDING_DIP, dpi, 96));
 
 	// get the original window position and coordinates of the monitor it's on
 	RECT rc;
