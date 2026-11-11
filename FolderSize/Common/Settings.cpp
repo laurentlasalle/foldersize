@@ -22,30 +22,6 @@ void SaveDWord(HKEY hKey, LPCTSTR lpValueName, DWORD dw)
 	RegSetValueEx(hKey, lpValueName, 0, REG_DWORD, (CONST BYTE*)&dw, sizeof(DWORD));
 }
 
-void LoadDisplayOptions(int& nDisplayFormat)
-{
-	HKEY hKey;
-	if (RegOpenKeyEx(HKEY_CURRENT_USER, COLUMN_SETTINGS_KEY, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
-	{
-		DWORD dw;
-		if (LoadDWord(hKey, DISPLAY_FORMAT_VALUE, dw))
-			nDisplayFormat = dw;
-
-		RegCloseKey(hKey);
-	}
-}
-
-void SaveDisplayOptions(int nDisplayFormat)
-{
-	HKEY hKey;
-	if (RegCreateKeyEx(HKEY_CURRENT_USER, COLUMN_SETTINGS_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS)
-	{
-		DWORD dwData = nDisplayFormat;
-		RegSetValueEx(hKey, DISPLAY_FORMAT_VALUE, 0, REG_DWORD, (CONST BYTE*)&dwData, sizeof(DWORD));
-		RegCloseKey(hKey);
-	}
-}
-
 int LoadScanDriveTypes()
 {
 	// they're all on by default, but a 0 in the registry will turn off each type

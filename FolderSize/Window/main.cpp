@@ -387,22 +387,10 @@ unsigned int __stdcall FolderViewScanner::ThreadProc(void* arg)
 
 
 
-static void FormatSizeWithOption(ULONGLONG nSize, LPTSTR pszBuff, UINT uiBufSize)
+static void FormatSize(ULONGLONG nSize, LPTSTR pszBuff, UINT uiBufSize)
 {
-	// Retrieve the string representation for the size
-	// as usual.
-	switch (0)
-	{
-	case 1:
-		StrFormatByteSize64(nSize, pszBuff, uiBufSize);
-		break;
-	case 2:
-		_i64tot_s(nSize, pszBuff, uiBufSize, 10);
-		break;
-	case 0:
-	default:
-		StrFormatKBSize(nSize, pszBuff, uiBufSize);
-	}
+	// Same format as the Size column of File Explorer (for example "2 572 455 KB").
+	StrFormatKBSize(nSize, pszBuff, uiBufSize);
 }
 
 static bool GetFolderInfoToBuffer(LPCTSTR pszFolder, ULONGLONG FOLDERINFO2::* sizeMember, LPTSTR pszBuffer, DWORD cch)
@@ -422,7 +410,7 @@ static bool GetFolderInfoToBuffer(LPCTSTR pszFolder, ULONGLONG FOLDERINFO2::* si
 	}
 	else
 	{
-		FormatSizeWithOption(nSize.*sizeMember, pszBuffer, cch);
+		FormatSize(nSize.*sizeMember, pszBuffer, cch);
 
 		size_t len = wcslen(pszBuffer);
 		if (len < cch - 1 && (nSize.giff == GIFF_DIRTY || nSize.giff == GIFF_SCANNING))
@@ -546,7 +534,7 @@ LRESULT FSWindow::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled
 
 static void FormatFolderInfoBuffer(FOLDERINFO2& fi, LPTSTR buffer, UINT cch)
 {
-	FormatSizeWithOption(fi.nLogicalSize, buffer, cch);
+	FormatSize(fi.nLogicalSize, buffer, cch);
 
 	size_t len = wcslen(buffer);
 	if (len < cch - 1 && (fi.giff == GIFF_DIRTY || fi.giff == GIFF_SCANNING))

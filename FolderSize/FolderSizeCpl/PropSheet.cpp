@@ -32,36 +32,6 @@ INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 					GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED);
 			SendMessage(GetParent(hwndDlg), WM_SETICON, ICON_SMALL, (LPARAM)hSmallIcon);
 
-			// localize the messages
-			const LONGLONG llSampleSize = 2634192972;
-			TCHAR szFormatMsg[256], szSize[256], szDisplayMsg[256];
-			GetDlgItemText(hwndDlg, IDC_DISPLAY_EXPLORER, szFormatMsg, 256);
-			StrFormatKBSize(llSampleSize, szSize, 256);
-			wsprintf(szDisplayMsg, szFormatMsg, szSize);
-			SetDlgItemText(hwndDlg, IDC_DISPLAY_EXPLORER, szDisplayMsg);
-			GetDlgItemText(hwndDlg, IDC_DISPLAY_COMPACT, szFormatMsg, 256);
-			StrFormatByteSize64(llSampleSize, szSize, 256);
-			wsprintf(szDisplayMsg, szFormatMsg, szSize);
-			SetDlgItemText(hwndDlg, IDC_DISPLAY_COMPACT, szDisplayMsg);
-			GetDlgItemText(hwndDlg, IDC_DISPLAY_BYTES, szFormatMsg, 256);
-			_i64tot(llSampleSize, szSize, 10);
-			wsprintf(szDisplayMsg, szFormatMsg, szSize);
-			SetDlgItemText(hwndDlg, IDC_DISPLAY_BYTES, szDisplayMsg);
-
-			// load the format option
-			int nDisplayFormat = 0;
-			LoadDisplayOptions(nDisplayFormat);
-
-			UINT nIDCheck;
-			switch (nDisplayFormat)
-			{
-				case 1:  nIDCheck = IDC_DISPLAY_COMPACT;  break;
-				case 2:  nIDCheck = IDC_DISPLAY_BYTES;    break;
-				case 0:
-				default: nIDCheck = IDC_DISPLAY_EXPLORER; break;
-			}
-			CheckDlgButton(hwndDlg, nIDCheck, BST_CHECKED);
-
 			// load the drive type options
 			int DriveTypes = LoadScanDriveTypes();
 			CheckDlgButton(hwndDlg, IDC_DISPLAY_LOCAL, DriveTypes & SCANDRIVETYPE_LOCAL ? BST_CHECKED : BST_UNCHECKED);
@@ -73,9 +43,6 @@ INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 	case WM_COMMAND:
 		switch (LOWORD(wParam))
 		{
-		case IDC_DISPLAY_EXPLORER:
-		case IDC_DISPLAY_COMPACT:
-		case IDC_DISPLAY_BYTES:
 		case IDC_DISPLAY_LOCAL:
 		case IDC_DISPLAY_CD:
 		case IDC_DISPLAY_REMOVABLE:
@@ -91,13 +58,6 @@ INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			{
 			case PSN_APPLY:
 				// read the settings and write them to the registry
-				int nDisplayFormat = 0;
-				if (IsDlgButtonChecked(hwndDlg, IDC_DISPLAY_COMPACT) == BST_CHECKED)
-					nDisplayFormat = 1;
-				else if (IsDlgButtonChecked(hwndDlg, IDC_DISPLAY_BYTES) == BST_CHECKED)
-					nDisplayFormat = 2;
-				SaveDisplayOptions(nDisplayFormat);
-
 				int DriveTypes = 0;
 				if (IsDlgButtonChecked(hwndDlg, IDC_DISPLAY_LOCAL) == BST_CHECKED)
 					DriveTypes |= SCANDRIVETYPE_LOCAL;

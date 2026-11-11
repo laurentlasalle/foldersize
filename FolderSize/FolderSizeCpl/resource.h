@@ -20,8 +20,6 @@
 #define IDD_CREDITS                     111
 #define IDC_SERVICE_START               1001
 #define IDC_SERVICE_STOP                1002
-#define IDC_DISPLAY_EXPLORER            1003
-#define IDC_DISPLAY_COMPACT             1004
 #define IDC_SERVICE_STATUS              1005
 #define IDC_SERVICE_INFOICON            1006
 #define IDC_SERVICE_PAUSE               1007
@@ -37,7 +35,6 @@
 #define IDC_DISPLAY_LOCAL               1016
 #define IDC_DISPLAY_CD                  1017
 #define IDC_DISPLAY_REMOVABLE           1018
-#define IDC_DISPLAY_BYTES               1019
 #define IDC_CREDITS                     1020
 #define IDC_FOLDERSIZEICON              1021
 #define IDC_TRANSLATORS                 1022
