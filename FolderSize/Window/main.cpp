@@ -75,44 +75,6 @@ private:
 	TCHAR m_filename[MAX_PATH];
 };
 
-static bool GetShellWindows(IWebBrowser2**& pWebBrowsers, long& nCount)
-{
-	bool bSuccess = false;
-	IShellWindows* psw;
-	if (SUCCEEDED(CoCreateInstance(CLSID_ShellWindows, NULL, CLSCTX_ALL, IID_IShellWindows, (void**)&psw)))
-	{
-		long lItemCount;
-		if (SUCCEEDED(psw->get_Count(&lItemCount)))
-		{
-			nCount = 0;
-
-			pWebBrowsers = new IWebBrowser2*[lItemCount];
-
-			VARIANT varItem;
-			V_VT(&varItem) = VT_I4;
-			for (long i=0; i<lItemCount; i++)
-			{
-				V_I4(&varItem) = i;
-				IDispatch* pDispatch;
-				// Item can return S_OK even if there is no IDispatch
-				if (SUCCEEDED(psw->Item(varItem, &pDispatch)) && pDispatch)
-				{
-					IWebBrowser2* pWebBrowser;
-					if (SUCCEEDED(pDispatch->QueryInterface(IID_IWebBrowser2, (void**)&pWebBrowser)))
-					{
-						pWebBrowsers[nCount++] = pWebBrowser;
-					}
-					pDispatch->Release();
-				}
-			}
-
-			bSuccess = true;
-		}
-		psw->Release();
-	}
-	return bSuccess;
-}
-
 #define WM_NEWITEMS      (WM_APP + 1)
 #define WM_REFRESHITEMS  (WM_APP + 2)
 
@@ -132,7 +94,8 @@ private:
 	static unsigned int __stdcall ThreadProc(void* arg);
 	DWORD ThreadProc();
 
-	HWND m_hWndBrowser;
+	// The web browser object of the Explorer tab, marshaled for use in the scanner thread.
+	IStream* m_pBrowserStream;
 	HWND m_hWndPost;
 
 	HANDLE m_hThread;
@@ -143,16 +106,23 @@ private:
 	std::vector<RefreshItem*> m_refreshItems;
 };
 
-FolderViewScanner::FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost) : m_hWndBrowser(NULL), m_hWndPost(hWndPost), m_hThread(NULL), m_hQuitEvent(NULL)
+FolderViewScanner::FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost) : m_pBrowserStream(NULL), m_hWndPost(hWndPost), m_hThread(NULL), m_hQuitEvent(NULL)
 {
-	// ok, get the HWND for this web browser, so i can open it in the other thread
 	InitializeCriticalSection(&m_cs);
 	m_hQuitEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-	m_hWndBrowser;
-	if (SUCCEEDED(pWebBrowser->get_HWND((SHANDLE_PTR*)&m_hWndBrowser)))
+
+	// Pass the web browser object itself to the scanner thread. It used to be looked up again
+	// in the thread by the HWND of the Explorer window, but with File Explorer tabs every tab of
+	// a window has the same HWND, so the lookup always found the first tab.
+	if (SUCCEEDED(CoMarshalInterThreadInterfaceInStream(IID_IWebBrowser2, pWebBrowser, &m_pBrowserStream)))
 	{
 		unsigned int threadId;
 		m_hThread = (HANDLE)_beginthreadex(NULL, 0, ThreadProc, this, 0, &threadId);
+		if (!m_hThread)
+		{
+			m_pBrowserStream->Release();
+			m_pBrowserStream = NULL;
+		}
 	}
 }
 
@@ -191,31 +161,14 @@ void FolderViewScanner::Quit()
 	SetEvent(m_hQuitEvent);
 }
 
-static IWebBrowser2* GetWebBrowserFromHandle(HWND hWnd)
-{
-	IWebBrowser2* pWB = NULL;
-	IWebBrowser2** pWebBrowsers;
-	long nCount;
-	if (GetShellWindows(pWebBrowsers, nCount))
-	{
-		for (long i=0; i<nCount; i++)
-		{
-			HWND hwndExplorer;
-			if (pWB == NULL && SUCCEEDED(pWebBrowsers[i]->get_HWND((SHANDLE_PTR*)&hwndExplorer)) && hwndExplorer == hWnd)
-				pWB = pWebBrowsers[i];
-			else
-				pWebBrowsers[i]->Release();
-		}
-		delete[] pWebBrowsers;
-	}
-	return pWB;
-}
-
 DWORD FolderViewScanner::ThreadProc()
 {
-	IWebBrowser2* pWebBrowser = GetWebBrowserFromHandle(m_hWndBrowser);
-	if (pWebBrowser == NULL)
-		return ERROR_INVALID_WINDOW_HANDLE;
+	// CoGetInterfaceAndReleaseStream releases the stream, whether it succeeds or not.
+	CComPtr<IWebBrowser2> pWebBrowser;
+	HRESULT hr = CoGetInterfaceAndReleaseStream(m_pBrowserStream, IID_IWebBrowser2, (void**)&pWebBrowser);
+	m_pBrowserStream = NULL;
+	if (FAILED(hr))
+		return hr;
 
 	// keep checking the state of the quit event
 
@@ -424,6 +377,36 @@ static bool GetFolderInfoToBuffer(LPCTSTR pszFolder, ULONGLONG FOLDERINFO2::* si
 
 
 
+#define WM_UPDATETABS (WM_APP + 3)
+
+// Returns the window of the tab currently in front in a File Explorer window. Each tab has
+// its own ShellTabWindowClass child window, and only the one in front is visible. On versions
+// of Windows without tabs there is only one, which is then always the active one.
+static HWND GetActiveTab(HWND hwndExplorer)
+{
+	HWND hwndFirst = FindWindowEx(hwndExplorer, NULL, _T("ShellTabWindowClass"), NULL);
+	for (HWND hwnd = hwndFirst; hwnd; hwnd = FindWindowEx(hwndExplorer, hwnd, _T("ShellTabWindowClass"), NULL))
+	{
+		if (::IsWindowVisible(hwnd))
+			return hwnd;
+	}
+	return hwndFirst;
+}
+
+// Returns the ShellTabWindowClass window that is hwnd or one of its parents, or NULL if there
+// is none. When NULL, the window can't tell tabs apart and behaves as before tabs existed:
+// it is always shown.
+static HWND FindTabWindow(HWND hwnd)
+{
+	for (; hwnd; hwnd = ::GetParent(hwnd))
+	{
+		TCHAR szClass[32];
+		if (GetClassName(hwnd, szClass, 32) && lstrcmp(szClass, _T("ShellTabWindowClass")) == 0)
+			return hwnd;
+	}
+	return NULL;
+}
+
 class FSWindow :
 	public CWindowImpl<FSWindow, CWindow, CWinTraits<WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX, WS_EX_TOOLWINDOW> >,
 	public IDispEventSimpleImpl<1, FSWindow, &DIID_DWebBrowserEvents2>
@@ -468,6 +451,10 @@ END_SINK_MAP()
 	void __stdcall OnNavigateComplete(IDispatch *pDisp, VARIANT *URL);
 	void __stdcall OnQuit();
 
+	HWND GetExplorerWindow() const { return m_hwndExplorer; }
+	bool IsTab(HWND hwndTab) const { return m_hwndTab == NULL || m_hwndTab == hwndTab; }
+	void UpdateTabVisibility(HWND hwndActiveTab, const RECT* prcPrevious);
+
 private:
 	void CreateIfUnminimizedFolderView();
 	void AdjustSizeForList();
@@ -475,13 +462,15 @@ private:
 
 	HWND m_lv;
 	HFONT m_hFont;
+	HWND m_hwndExplorer;  // top-level File Explorer window (shared by all its tabs)
+	HWND m_hwndTab;       // the tab's own window (ShellTabWindowClass), NULL if unknown
 	CComPtr<IWebBrowser2> m_pWebBrowser;
 	TCHAR m_szFolder[MAX_PATH * 4];
 	FolderViewScanner* m_pScanner;
 	std::map<std::wstring, ListItem*> m_nameMap;
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_pWebBrowser(pWebBrowser), m_pScanner(NULL)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_pWebBrowser(pWebBrowser), m_pScanner(NULL)
 {
 	DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -725,6 +714,11 @@ void FSWindow::CreateIfUnminimizedFolderView()
 		IShellBrowser* psb;
 		if (SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb)))
 		{
+			// Find the tab's own window: the shell browser's window, or the ShellTabWindowClass
+			// window that contains it.
+			HWND hwndBrowser;
+			m_hwndTab = SUCCEEDED(psb->GetWindow(&hwndBrowser)) ? FindTabWindow(hwndBrowser) : NULL;
+
 			IShellView* psv;
 			if (SUCCEEDED(psb->QueryActiveShellView(&psv)))
 			{
@@ -746,6 +740,7 @@ void FSWindow::CreateIfUnminimizedFolderView()
 									HWND hwndExplorer;
 									if (SUCCEEDED(m_pWebBrowser->get_HWND((SHANDLE_PTR*)&hwndExplorer)))
 									{
+										m_hwndExplorer = hwndExplorer;
 										WINDOWPLACEMENT wp = { sizeof(wp) };
 										::GetWindowPlacement(hwndExplorer, &wp);
 										if (wp.showCmd != SW_SHOWMINIMIZED)
@@ -755,7 +750,11 @@ void FSWindow::CreateIfUnminimizedFolderView()
 											rc.left = rc.right;
 											if (Create(hwndExplorer, rc, APP_NAME))
 											{
-												ShowWindow(SW_SHOWDEFAULT);
+												// Only the window of the tab in front is shown. The window
+												// manager shows and hides the windows as tabs are switched.
+												if (m_hwndTab == NULL || m_hwndTab == GetActiveTab(hwndExplorer))
+													ShowWindow(SW_SHOWNOACTIVATE);
+												::PostMessage(g_hwndMain, WM_UPDATETABS, (WPARAM)hwndExplorer, 0);
 											}
 										}
 									}
@@ -839,6 +838,27 @@ void FSWindow::AdjustSizeForList()
 }
 
 
+// Shows this window if its tab is the one in front, and hides it otherwise. prcPrevious is
+// the position of the window that was shown for the previous tab, if any, so the size
+// window stays where the user put it when switching tabs.
+void FSWindow::UpdateTabVisibility(HWND hwndActiveTab, const RECT* prcPrevious)
+{
+	if (m_hWnd == NULL)
+		return;
+	bool bActive = IsTab(hwndActiveTab);
+	if (bActive && !IsWindowVisible())
+	{
+		if (prcPrevious)
+			SetWindowPos(NULL, prcPrevious->left, prcPrevious->top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+		ShowWindow(SW_SHOWNOACTIVATE);
+		AdjustSizeForList();
+	}
+	else if (!bActive && IsWindowVisible())
+	{
+		ShowWindow(SW_HIDE);
+	}
+}
+
 _ATL_FUNC_INFO FSWindow::NavigateCompleteInfo = { CC_STDCALL, VT_EMPTY, 2, {VT_DISPATCH, VT_BYREF | VT_VARIANT} };
 _ATL_FUNC_INFO FSWindow::QuitInfo = { CC_STDCALL, VT_EMPTY, 0, NULL };
 
@@ -887,6 +907,7 @@ BEGIN_MSG_MAP(FSWindow)
 	MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
 	MESSAGE_HANDLER(WM_NOTIFYICON, OnAppIconMsg)
 	MESSAGE_HANDLER(WM_KILLWINDOW, OnKillWindow)
+	MESSAGE_HANDLER(WM_UPDATETABS, OnUpdateTabs)
 	COMMAND_ID_HANDLER(ID_SHOW, OnShowPopups)
 	COMMAND_ID_HANDLER(ID_START, OnStart)
 	COMMAND_ID_HANDLER(ID_SETTINGS, OnSettings)
@@ -903,16 +924,23 @@ END_SINK_MAP()
 	LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnAppIconMsg(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnKillWindow(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnUpdateTabs(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnShowPopups(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	LRESULT OnStart(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	LRESULT OnSettings(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	LRESULT OnExit(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	void __stdcall OnWindowRegistered(long lCookie);
 
+	void AddFSWindow(IWebBrowser2* pwb);
+	void WatchTabs(HWND hwndExplorer);
+	static void CALLBACK TabEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD idEventThread, DWORD dwmsEventTime);
+
 	HICON m_icon;
 	HICON m_gray;
 	CComPtr<IShellWindows> m_pShellWindows;
 	set<FSWindow*> m_FSWindows;
+	// One event hook per process that hosts File Explorer windows, to see tabs being switched.
+	map<DWORD, HWINEVENTHOOK> m_tabHooks;
 	bool m_bAutoRun;
 };
 
@@ -1025,7 +1053,7 @@ void ShellWindowManager::Activate()
 				IWebBrowser2* pwb;
 				if (SUCCEEDED(pDisp->QueryInterface(IID_IWebBrowser2, (void**)&pwb)))
 				{
-					m_FSWindows.insert(new FSWindow(pwb));
+					AddFSWindow(pwb);
 				}
 				pDisp->Release();
 			}
@@ -1050,6 +1078,9 @@ void ShellWindowManager::Deactivate()
 	for (set<FSWindow*>::iterator itr = m_FSWindows.begin(); itr != m_FSWindows.end(); itr++)
 		delete *itr;
 	m_FSWindows.clear();
+	for (map<DWORD, HWINEVENTHOOK>::iterator itr = m_tabHooks.begin(); itr != m_tabHooks.end(); itr++)
+		UnhookWinEvent(itr->second);
+	m_tabHooks.clear();
 	DispEventUnadvise(m_pShellWindows);
 	m_pShellWindows.Release();
 }
@@ -1100,6 +1131,77 @@ LRESULT ShellWindowManager::OnKillWindow(UINT uMsg, WPARAM wParam, LPARAM lParam
 	FSWindow* pWindow = (FSWindow*)lParam;
 	m_FSWindows.erase(pWindow);
 	delete pWindow;
+	return 0;
+}
+
+void ShellWindowManager::AddFSWindow(IWebBrowser2* pwb)
+{
+	m_FSWindows.insert(new FSWindow(pwb));
+	HWND hwndExplorer;
+	if (SUCCEEDED(pwb->get_HWND((SHANDLE_PTR*)&hwndExplorer)) && hwndExplorer)
+		WatchTabs(hwndExplorer);
+}
+
+// File Explorer doesn't report tab switches through its automation events, but switching tabs
+// shows the window of the new tab and hides the old one. Watch those show/hide events, only in
+// the process that hosts the Explorer window, so the program wakes up only for Explorer windows.
+void ShellWindowManager::WatchTabs(HWND hwndExplorer)
+{
+	DWORD dwProcessId = 0;
+	GetWindowThreadProcessId(hwndExplorer, &dwProcessId);
+	if (dwProcessId == 0 || m_tabHooks.find(dwProcessId) != m_tabHooks.end())
+		return;
+	HWINEVENTHOOK hook = SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, NULL, TabEventProc,
+		dwProcessId, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+	if (hook)
+		m_tabHooks[dwProcessId] = hook;
+}
+
+// Called on this program's main thread (out-of-context hook), for windows shown or hidden in
+// the watched processes.
+void CALLBACK ShellWindowManager::TabEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD idEventThread, DWORD dwmsEventTime)
+{
+	if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF || hwnd == NULL)
+		return;
+	TCHAR szClass[32];
+	if (GetClassName(hwnd, szClass, 32) && lstrcmp(szClass, _T("ShellTabWindowClass")) == 0)
+		::PostMessage(g_hwndMain, WM_UPDATETABS, (WPARAM)GetAncestor(hwnd, GA_ROOT), 0);
+}
+
+// Shows the size window of the active tab of an Explorer window and hides the others.
+LRESULT ShellWindowManager::OnUpdateTabs(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	HWND hwndExplorer = (HWND)wParam;
+	if (!::IsWindow(hwndExplorer))
+		return 0;
+	HWND hwndActiveTab = GetActiveTab(hwndExplorer);
+
+	// Remember where the currently shown window is (the previous tab's), before hiding it.
+	RECT rcPrevious;
+	bool bHavePrevious = false;
+	for (set<FSWindow*>::iterator itr = m_FSWindows.begin(); itr != m_FSWindows.end(); itr++)
+	{
+		FSWindow* p = *itr;
+		if (p->GetExplorerWindow() == hwndExplorer && p->m_hWnd && p->IsWindowVisible() && !p->IsTab(hwndActiveTab))
+		{
+			p->GetWindowRect(&rcPrevious);
+			bHavePrevious = true;
+			break;
+		}
+	}
+	// Hide first, then show, so two windows are never shown at the same time.
+	for (int pass = 0; pass < 2; pass++)
+	{
+		for (set<FSWindow*>::iterator itr = m_FSWindows.begin(); itr != m_FSWindows.end(); itr++)
+		{
+			FSWindow* p = *itr;
+			if (p->GetExplorerWindow() != hwndExplorer)
+				continue;
+			bool bIsActive = p->IsTab(hwndActiveTab);
+			if ((pass == 0 && !bIsActive) || (pass == 1 && bIsActive))
+				p->UpdateTabVisibility(hwndActiveTab, bHavePrevious ? &rcPrevious : NULL);
+		}
+	}
 	return 0;
 }
 
@@ -1178,7 +1280,7 @@ void ShellWindowManager::OnWindowRegistered(long lCookie)
 			IWebBrowser2* pwb;
 			if (SUCCEEDED(pDisp->QueryInterface(IID_IWebBrowser2, (void**)&pwb)))
 			{
-				m_FSWindows.insert(new FSWindow(pwb));
+				AddFSWindow(pwb);
 			}
 			pDisp->Release();
 		}
