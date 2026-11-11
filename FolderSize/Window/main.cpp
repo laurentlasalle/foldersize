@@ -379,6 +379,71 @@ static bool GetFolderInfoToBuffer(LPCTSTR pszFolder, ULONGLONG FOLDERINFO2::* si
 
 #define WM_UPDATETABS (WM_APP + 3)
 
+// ---- Dark mode ----
+// The window follows the "Choose your app mode" setting of Windows (Light or Dark), and switches
+// live when it changes.
+
+// True when Windows apps should use the dark theme.
+static bool IsDarkModeEnabled()
+{
+	DWORD dwLight = 1, cb = sizeof(dwLight);
+	if (RegGetValue(HKEY_CURRENT_USER, _T("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+			_T("AppsUseLightTheme"), RRF_RT_REG_DWORD, NULL, &dwLight, &cb) != ERROR_SUCCESS)
+		return false;
+	return dwLight == 0;
+}
+
+// Popup menus (the tray icon menu) have no documented dark mode. These two functions, exported
+// by uxtheme.dll by ordinal only, are what Windows itself and many programs use:
+// SetPreferredAppMode(AllowDark) lets menus follow the app mode, and FlushMenuThemes makes
+// them pick up a change. If they are missing, menus simply stay light.
+enum PreferredAppMode { AppModeDefault = 0, AppModeAllowDark = 1 };
+typedef PreferredAppMode (WINAPI *PFN_SetPreferredAppMode)(PreferredAppMode mode);
+typedef void (WINAPI *PFN_FlushMenuThemes)();
+
+static void AllowDarkMenus()
+{
+	HMODULE hUxTheme = GetModuleHandle(_T("uxtheme.dll"));
+	if (!hUxTheme)
+		hUxTheme = LoadLibraryEx(_T("uxtheme.dll"), NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+	if (!hUxTheme)
+		return;
+	PFN_SetPreferredAppMode pfnSetPreferredAppMode = (PFN_SetPreferredAppMode)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(135));
+	PFN_FlushMenuThemes pfnFlushMenuThemes = (PFN_FlushMenuThemes)GetProcAddress(hUxTheme, MAKEINTRESOURCEA(136));
+	if (pfnSetPreferredAppMode)
+		pfnSetPreferredAppMode(AppModeAllowDark);
+	if (pfnFlushMenuThemes)
+		pfnFlushMenuThemes();
+}
+
+// Colors of the list in dark mode, matching the dark File Explorer.
+static const COLORREF DARK_BACKGROUND = RGB(0x19, 0x19, 0x19);
+static const COLORREF DARK_TEXT = RGB(0xFF, 0xFF, 0xFF);
+
+// Subclass of the list view: the column header sends its custom draw notifications to the
+// list view, not to our window, so the list view is subclassed to give the header a light
+// text color in dark mode (the dark header theme keeps dark text otherwise).
+static LRESULT CALLBACK ListViewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+	const bool* pbDark = (const bool*)dwRefData;
+	if (uMsg == WM_NOTIFY && *pbDark)
+	{
+		LPNMHDR pnmh = (LPNMHDR)lParam;
+		if (pnmh->hwndFrom == ListView_GetHeader(hwnd) && pnmh->code == NM_CUSTOMDRAW)
+		{
+			LPNMCUSTOMDRAW pcd = (LPNMCUSTOMDRAW)lParam;
+			if (pcd->dwDrawStage == CDDS_PREPAINT)
+				return CDRF_NOTIFYITEMDRAW;
+			if (pcd->dwDrawStage == CDDS_ITEMPREPAINT)
+			{
+				SetTextColor(pcd->hdc, DARK_TEXT);
+				return CDRF_DEFAULT;
+			}
+		}
+	}
+	return DefSubclassProc(hwnd, uMsg, wParam, lParam);
+}
+
 // Returns the window of the tab currently in front in a File Explorer window. Each tab has
 // its own ShellTabWindowClass child window, and only the one in front is visible. On versions
 // of Windows without tabs there is only one, which is then always the active one.
@@ -422,6 +487,7 @@ BEGIN_MSG_MAP(FSWindow)
 	MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
 	MESSAGE_HANDLER(WM_SIZE, OnSize)
 	MESSAGE_HANDLER(WM_DPICHANGED, OnDpiChanged)
+	MESSAGE_HANDLER(WM_SETTINGCHANGE, OnSettingChange)
 	MESSAGE_HANDLER(WM_NEWITEMS, OnNewItems)
 	MESSAGE_HANDLER(WM_REFRESHITEMS, OnRefreshItems)
 	MESSAGE_HANDLER(WM_CLOSE, OnClose)
@@ -434,6 +500,7 @@ END_MSG_MAP()
 	LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnClose(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -459,18 +526,20 @@ private:
 	void CreateIfUnminimizedFolderView();
 	void AdjustSizeForList();
 	void UpdateFontForDpi();
+	void ApplyTheme();
 
 	HWND m_lv;
 	HFONT m_hFont;
 	HWND m_hwndExplorer;  // top-level File Explorer window (shared by all its tabs)
 	HWND m_hwndTab;       // the tab's own window (ShellTabWindowClass), NULL if unknown
+	bool m_bDark;         // dark mode currently applied (read by ListViewSubclassProc)
 	CComPtr<IWebBrowser2> m_pWebBrowser;
 	TCHAR m_szFolder[MAX_PATH * 4];
 	FolderViewScanner* m_pScanner;
 	std::map<std::wstring, ListItem*> m_nameMap;
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_pWebBrowser(pWebBrowser), m_pScanner(NULL)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_pWebBrowser(pWebBrowser), m_pScanner(NULL)
 {
 	DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -497,7 +566,8 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 
 	ListView_SetExtendedListViewStyle(m_lv, LVS_EX_FULLROWSELECT | LVS_EX_AUTOSIZECOLUMNS | LVS_EX_DOUBLEBUFFER);
 
-	SetWindowTheme(m_lv, L"Explorer", NULL);
+	SetWindowSubclass(m_lv, ListViewSubclassProc, 0, (DWORD_PTR)&m_bDark);
+	ApplyTheme();
 	UpdateFontForDpi();
 
 	LVCOLUMN column;
@@ -524,6 +594,8 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 
 LRESULT FSWindow::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
+	if (m_lv)
+		RemoveWindowSubclass(m_lv, ListViewSubclassProc, 0);
 	if (m_hFont)
 	{
 		DeleteObject(m_hFont);
@@ -561,6 +633,36 @@ LRESULT FSWindow::OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
 	UpdateFontForDpi();
 	// The new font changes the size of the rows and columns, so fit the window to the list again.
 	AdjustSizeForList();
+	return 0;
+}
+
+// Applies the light or dark theme to the window, following the Windows app mode.
+void FSWindow::ApplyTheme()
+{
+	m_bDark = IsDarkModeEnabled();
+
+	// Title bar (documented: DWMWA_USE_IMMERSIVE_DARK_MODE, value 20)
+	BOOL bDarkTitle = m_bDark;
+	DwmSetWindowAttribute(m_hWnd, 20, &bDarkTitle, sizeof(bDarkTitle));
+
+	// List, scroll bars and column header
+	SetWindowTheme(m_lv, m_bDark ? L"DarkMode_Explorer" : L"Explorer", NULL);
+	SetWindowTheme(ListView_GetHeader(m_lv), m_bDark ? L"DarkMode_ItemsView" : NULL, NULL);
+	COLORREF background = m_bDark ? DARK_BACKGROUND : GetSysColor(COLOR_WINDOW);
+	COLORREF text = m_bDark ? DARK_TEXT : GetSysColor(COLOR_WINDOWTEXT);
+	ListView_SetBkColor(m_lv, background);
+	ListView_SetTextBkColor(m_lv, background);
+	ListView_SetTextColor(m_lv, text);
+
+	::RedrawWindow(m_lv, NULL, NULL, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN | RDW_ERASE);
+}
+
+// Windows broadcasts "ImmersiveColorSet" when the app mode (light/dark) changes.
+LRESULT FSWindow::OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	if (lParam && lstrcmp((LPCTSTR)lParam, _T("ImmersiveColorSet")) == 0)
+		ApplyTheme();
+	bHandled = FALSE;
 	return 0;
 }
 
@@ -1098,6 +1200,9 @@ LRESULT ShellWindowManager::OnAppIconMsg(UINT uMsg, WPARAM wParam, LPARAM lParam
 		case WM_CONTEXTMENU:
 		{
 			SetForegroundWindow(m_hWnd);
+			// The message-only window doesn't receive theme change broadcasts, so refresh the
+			// menu theme each time the menu opens, in case the app mode changed.
+			AllowDarkMenus();
 			HMENU hMenu = LoadMenu((HINSTANCE)GetWindowLongPtr(GWLP_HINSTANCE), MAKEINTRESOURCE(IDR_MENU));
 			HMENU hSubMenu = GetSubMenu(hMenu, 0);
 			MENUITEMINFO mii = { sizeof(mii) };

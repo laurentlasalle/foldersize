@@ -14,6 +14,7 @@
 #include <exdisp.h>
 #include <exdispid.h>
 #include <uxtheme.h>
+#include <dwmapi.h>
 
 #include <tchar.h>
 #include <assert.h>
