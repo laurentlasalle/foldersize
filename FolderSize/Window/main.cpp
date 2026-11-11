@@ -440,7 +440,7 @@ static LRESULT CALLBACK ListViewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam
 			if (pcd->dwDrawStage == CDDS_ITEMPREPAINT)
 			{
 				SetTextColor(pcd->hdc, DARK_TEXT);
-				return CDRF_DEFAULT;
+				return CDRF_DODEFAULT;
 			}
 		}
 	}
