@@ -118,8 +118,18 @@ static DWORD RunElevated(HWND hwnd, LPCWSTR pszCommand)
 	sei.lpFile = szRundll;
 	sei.lpParameters = szParameters;
 	sei.nShow = SW_HIDE;
-	if (!ShellExecuteExW(&sei))
-		return GetLastError();
+	BOOL bLaunched = ShellExecuteExW(&sei);
+	DWORD dwLaunchError = bLaunched ? 0 : GetLastError();
+
+	// The approval prompt shows on a separate desktop, and when it closes Windows may give the
+	// foreground to another application, leaving the panel behind. Bring it back. Windows may
+	// still refuse; it then flashes the panel's button on the taskbar instead.
+	HWND hwndSheet = GetAncestor(hwnd, GA_ROOT);
+	if (hwndSheet)
+		SetForegroundWindow(hwndSheet);
+
+	if (!bLaunched)
+		return dwLaunchError;
 
 	DWORD dwError = ERROR_GEN_FAILURE;
 	if (sei.hProcess)
