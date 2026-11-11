@@ -555,6 +555,10 @@ static PFNLVCOMPARE GetCompareFunction(int sort);
 // Sent by the control panel when settings are applied (see SETTINGS_CHANGED_MESSAGE).
 static const UINT WM_SETTINGSCHANGED = RegisterWindowMessage(SETTINGS_CHANGED_MESSAGE);
 
+// Broadcast by the taskbar when it is (re)created, for example after File Explorer restarts:
+// icons in the notification area must then be added again.
+static const UINT WM_TASKBARCREATED = RegisterWindowMessage(L"TaskbarCreated");
+
 class FSWindow :
 	public CWindowImpl<FSWindow, CWindow, CWinTraits<WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX, WS_EX_TOOLWINDOW> >,
 	public IDispEventSimpleImpl<1, FSWindow, &DIID_DWebBrowserEvents2>,
@@ -1452,6 +1456,7 @@ BEGIN_MSG_MAP(FSWindow)
 	MESSAGE_HANDLER(WM_KILLWINDOW, OnKillWindow)
 	MESSAGE_HANDLER(WM_UPDATETABS, OnUpdateTabs)
 	MESSAGE_HANDLER(WM_SETTINGSCHANGED, OnSettingsChanged)
+	MESSAGE_HANDLER(WM_TASKBARCREATED, OnTaskbarCreated)
 	COMMAND_ID_HANDLER(ID_SHOW, OnShowPopups)
 	COMMAND_ID_HANDLER(ID_START, OnStart)
 	COMMAND_ID_HANDLER(ID_SETTINGS, OnSettings)
@@ -1470,6 +1475,8 @@ END_SINK_MAP()
 	LRESULT OnKillWindow(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnUpdateTabs(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnSettingsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnTaskbarCreated(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	void AddTrayIcon(HICON hIcon);
 	LRESULT OnShowPopups(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	LRESULT OnStart(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	LRESULT OnSettings(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
@@ -1497,7 +1504,10 @@ _ATL_FUNC_INFO ShellWindowManager::ShellWindowsEventInfo = { CC_STDCALL, VT_EMPT
 
 ShellWindowManager::ShellWindowManager() : m_icon(NULL), m_gray(NULL), m_hScannerJob(NULL)
 {
-	g_hwndMain = Create(HWND_MESSAGE);
+	// A hidden top-level window rather than a message-only one: message-only windows can't be
+	// found with FindWindow (used to detect a running instance, and by the control panel and the
+	// installer to reach it) and don't receive broadcasts such as "TaskbarCreated".
+	g_hwndMain = Create(NULL, NULL, APP_NAME, WS_POPUP, WS_EX_TOOLWINDOW);
 }
 
 LRESULT ShellWindowManager::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -1542,21 +1552,13 @@ LRESULT ShellWindowManager::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BO
 		DeleteObject(ii.hbmMask);
 	}
 
-	NOTIFYICONDATA nid = { sizeof(nid) };
-	nid.hWnd = m_hWnd;
-	nid.uID = 1;
-	nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
-	nid.uCallbackMessage = WM_NOTIFYICON;
-	nid.hIcon = m_icon;
-	lstrcpy(nid.szTip, APP_NAME);
-	BOOL bRes = Shell_NotifyIcon(NIM_ADD, &nid);
-
-	nid.uVersion = NOTIFYICON_VERSION_4;
-	bRes = Shell_NotifyIcon(NIM_SETVERSION, &nid);
+	AddTrayIcon(m_icon);
 
 	// Accept the settings message even if this program runs with more rights than the control
-	// panel (Windows otherwise blocks messages from processes with fewer rights).
+	// panel (Windows otherwise blocks messages from processes with fewer rights), and likewise
+	// the taskbar's "TaskbarCreated" broadcast.
 	ChangeWindowMessageFilterEx(m_hWnd, WM_SETTINGSCHANGED, MSGFLT_ALLOW, NULL);
+	ChangeWindowMessageFilterEx(m_hWnd, WM_TASKBARCREATED, MSGFLT_ALLOW, NULL);
 
 	StartPortableScanner();
 	Activate();
@@ -1665,8 +1667,7 @@ LRESULT ShellWindowManager::OnAppIconMsg(UINT uMsg, WPARAM wParam, LPARAM lParam
 			HMENU hMenu = LoadMenu((HINSTANCE)GetWindowLongPtr(GWLP_HINSTANCE), MAKEINTRESOURCE(IDR_MENU));
 			HMENU hSubMenu = GetSubMenu(hMenu, 0);
 
-			// Menu texts in the user interface language. This window doesn't receive the
-			// settings broadcast (it's a message-only window), so read the language here.
+			// Menu texts in the user interface language (read again in case it changed).
 			RefreshUiLanguage();
 			const struct { UINT nID; UINT nStrID; } menuTexts[] = {
 				{ ID_SHOW, STR_MENU_SHOW_POPUPS },
@@ -1849,6 +1850,29 @@ LRESULT ShellWindowManager::OnUpdateTabs(UINT uMsg, WPARAM wParam, LPARAM lParam
 				p->UpdateTabVisibility(hwndActiveTab, bHavePrevious ? &rcPrevious : NULL);
 		}
 	}
+	return 0;
+}
+
+void ShellWindowManager::AddTrayIcon(HICON hIcon)
+{
+	NOTIFYICONDATA nid = { sizeof(nid) };
+	nid.hWnd = m_hWnd;
+	nid.uID = 1;
+	nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
+	nid.uCallbackMessage = WM_NOTIFYICON;
+	nid.hIcon = hIcon;
+	lstrcpy(nid.szTip, APP_NAME);
+	Shell_NotifyIcon(NIM_ADD, &nid);
+
+	nid.uVersion = NOTIFYICON_VERSION_4;
+	Shell_NotifyIcon(NIM_SETVERSION, &nid);
+}
+
+// The taskbar was recreated (File Explorer restarted): add the icon again, gray when the
+// windows are turned off.
+LRESULT ShellWindowManager::OnTaskbarCreated(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	AddTrayIcon(m_pShellWindows || !m_gray ? m_icon : m_gray);
 	return 0;
 }
 

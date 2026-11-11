@@ -163,7 +163,7 @@ INT_PTR CALLBACK GeneralProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 				// Tell the running FolderSize.exe, so its windows pick up the new language. The
 				// settings panel itself shows the new language the next time it is opened.
 				{
-					HWND hwndMain = FindWindowEx(HWND_MESSAGE, NULL, MAIN_WINDOW_CLASS, NULL);
+					HWND hwndMain = FindWindow(MAIN_WINDOW_CLASS, NULL);
 					if (hwndMain)
 						PostMessage(hwndMain, RegisterWindowMessage(SETTINGS_CHANGED_MESSAGE), 0, 0);
 				}

@@ -33,7 +33,7 @@ std::wstring Tr(UINT id);
 
 // Registered window message sent by the control panel when settings are applied, so the
 // running window can update (for example to change language). It is posted to the main
-// (message-only) window of FolderSize.exe, found by its class name, which passes it on to the
+// (hidden) window of FolderSize.exe, found by its class name, which passes it on to the
 // size windows. A broadcast can't be used: it doesn't reach owned windows, and the size windows
 // are owned by File Explorer windows.
 #define SETTINGS_CHANGED_MESSAGE L"FolderSizeRedux.SettingsChanged"
