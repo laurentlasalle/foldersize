@@ -13,6 +13,7 @@
 #include <shlobj.h>
 #include <exdisp.h>
 #include <exdispid.h>
+#include <shdispid.h>
 #include <uxtheme.h>
 #include <vssym32.h>
 #include <dwmapi.h>

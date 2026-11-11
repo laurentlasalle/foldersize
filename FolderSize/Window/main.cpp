@@ -553,8 +553,12 @@ static PFNLVCOMPARE GetCompareFunction(int sort);
 
 class FSWindow :
 	public CWindowImpl<FSWindow, CWindow, CWinTraits<WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX, WS_EX_TOOLWINDOW> >,
-	public IDispEventSimpleImpl<1, FSWindow, &DIID_DWebBrowserEvents2>
+	public IDispEventSimpleImpl<1, FSWindow, &DIID_DWebBrowserEvents2>,
+	public IDispEventSimpleImpl<2, FSWindow, &DIID_DShellFolderViewEvents>
 {
+	typedef IDispEventSimpleImpl<1, FSWindow, &DIID_DWebBrowserEvents2> BrowserEvents;
+	typedef IDispEventSimpleImpl<2, FSWindow, &DIID_DShellFolderViewEvents> FolderViewEvents;
+
 public:
 	FSWindow(IWebBrowser2* pWebBrowser);
 	~FSWindow();
@@ -597,13 +601,16 @@ END_MSG_MAP()
 
 static _ATL_FUNC_INFO NavigateCompleteInfo;
 static _ATL_FUNC_INFO QuitInfo;
+static _ATL_FUNC_INFO FileListEnumDoneInfo;
 BEGIN_SINK_MAP(FSWindow)
 	SINK_ENTRY_INFO(1, DIID_DWebBrowserEvents2, DISPID_NAVIGATECOMPLETE2, OnNavigateComplete, &NavigateCompleteInfo)
 	SINK_ENTRY_INFO(1, DIID_DWebBrowserEvents2, DISPID_ONQUIT, OnQuit, &QuitInfo)
+	SINK_ENTRY_INFO(2, DIID_DShellFolderViewEvents, DISPID_FILELISTENUMDONE, OnFileListEnumDone, &FileListEnumDoneInfo)
 END_SINK_MAP()
 
 	void __stdcall OnNavigateComplete(IDispatch *pDisp, VARIANT *URL);
 	void __stdcall OnQuit();
+	void __stdcall OnFileListEnumDone();
 
 	HWND GetExplorerWindow() const { return m_hwndExplorer; }
 	bool IsTab(HWND hwndTab) const { return m_hwndTab == NULL || m_hwndTab == hwndTab; }
@@ -619,6 +626,8 @@ private:
 	void StartScanner();
 	void Reload();
 	void WatchFolderChanges();
+	void WatchFolderView();
+	void StopWatchingFolderView();
 	void StopWatchingFolderChanges();
 	COLORREF GetBackgroundColor() const;
 
@@ -636,12 +645,13 @@ private:
 	UINT m_scanGeneration;    // number of the current scanner (see WM_ENUMDONE)
 	bool m_bReloading;        // reloading the same folder after a change (see Reload)
 	set<wstring> m_staleItems; // while reloading: items not found again yet
+	CComPtr<IDispatch> m_pFolderView;  // File Explorer's view of the folder, for its EnumDone event
 	ULONG m_changeNotifyId;   // registration for change notifications of the folder (0 if none)
 };
 
 FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_changeNotifyId(0)
 {
-	DispEventAdvise(m_pWebBrowser);
+	BrowserEvents::DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
 }
 
@@ -651,7 +661,8 @@ FSWindow::~FSWindow()
 		DestroyWindow();
 	if (m_pScanner)
 		m_pScanner->Quit();
-	DispEventUnadvise(m_pWebBrowser);
+	StopWatchingFolderView();
+	BrowserEvents::DispEventUnadvise(m_pWebBrowser);
 }
 
 LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -691,6 +702,7 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 
 	StartScanner();
 	WatchFolderChanges();
+	WatchFolderView();
 
 	return 0;
 }
@@ -1326,6 +1338,41 @@ void FSWindow::UpdateTabVisibility(HWND hwndActiveTab, const RECT* prcPrevious)
 
 _ATL_FUNC_INFO FSWindow::NavigateCompleteInfo = { CC_STDCALL, VT_EMPTY, 2, {VT_DISPATCH, VT_BYREF | VT_VARIANT} };
 _ATL_FUNC_INFO FSWindow::QuitInfo = { CC_STDCALL, VT_EMPTY, 0, NULL };
+_ATL_FUNC_INFO FSWindow::FileListEnumDoneInfo = { CC_STDCALL, VT_EMPTY, 0, NULL };
+
+// File Explorer fills its view of a folder in the background, so when the window reads the
+// folder right after a navigation, the view may still be empty or incomplete (for example the
+// root of a drive). Explorer's view reports when it has listed the whole folder (EnumDone);
+// read the folder again then. The update is done in place (see Reload).
+void FSWindow::WatchFolderView()
+{
+	StopWatchingFolderView();
+	CComQIPtr<IServiceProvider> psp(m_pWebBrowser);
+	CComPtr<IShellBrowser> psb;
+	CComPtr<IShellView> psv;
+	if (psp && SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb))
+		&& SUCCEEDED(psb->QueryActiveShellView(&psv))
+		&& SUCCEEDED(psv->GetItemObject(SVGIO_BACKGROUND, IID_IDispatch, (void**)&m_pFolderView)))
+	{
+		if (FAILED(FolderViewEvents::DispEventAdvise(m_pFolderView)))
+			m_pFolderView.Release();
+	}
+}
+
+void FSWindow::StopWatchingFolderView()
+{
+	if (m_pFolderView)
+	{
+		FolderViewEvents::DispEventUnadvise(m_pFolderView);
+		m_pFolderView.Release();
+	}
+}
+
+void FSWindow::OnFileListEnumDone()
+{
+	if (m_hWnd)
+		Reload();
+}
 
 void FSWindow::OnNavigateComplete(IDispatch* pDisp, VARIANT* URL)
 {
@@ -1348,6 +1395,7 @@ void FSWindow::OnNavigateComplete(IDispatch* pDisp, VARIANT* URL)
 
 		StartScanner();
 		WatchFolderChanges();
+		WatchFolderView();
 	}
 }
 
