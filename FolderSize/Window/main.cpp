@@ -267,7 +267,16 @@ DWORD FolderViewScanner::ThreadProc()
 											&& shfi.dwAttributes & SFGAO_FILESYSTEM)
 										{
 											FOLDERINFO2 fi;
-											if (shfi.dwAttributes & SFGAO_FOLDER)
+											// Decide between folder and file from the file system attribute, not from
+											// SFGAO_FOLDER: the shell also sets SFGAO_FOLDER on archives it can browse
+											// (.zip, and on Windows 11 .7z, .rar, .tar and others). Those are files on
+											// disk, which the service never scans, so asking it for their size returned
+											// nothing and the size column stayed empty.
+											DWORD dwFileAttributes = GetFileAttributes(pPath);
+											bool bIsDirectory = (dwFileAttributes != INVALID_FILE_ATTRIBUTES)
+												? (dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0
+												: (shfi.dwAttributes & SFGAO_FOLDER) != 0;
+											if (bIsDirectory)
 											{
 												GetInfoForFolder(pPath, fi);
 											}
