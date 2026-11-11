@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: microsoft/setup-msbuild@v2
 
@@ -47,9 +47,10 @@ jobs:
           if (-not (Test-Path FolderSize64.msi)) { throw 'FolderSize64.msi was not created' }
 
       - name: Upload build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: FolderSize-x64
+          if-no-files-found: error
           path: |
             FolderSize/MSI/FolderSize64.msi
             FolderSize/Release/x64/FolderSize.exe
