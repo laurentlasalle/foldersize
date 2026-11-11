@@ -112,14 +112,15 @@ static FolderKind GetFolderKind(LPCITEMIDLIST pidl)
 }
 
 // TEMPORARY measurement log, to remove once the cost of entering a folder is measured.
-// Enabled only while the file %TEMP%\FolderSize.log exists (create it empty to start logging,
-// delete it to stop). Each line is appended as UTF-8 text.
+// Enabled only while the file %LOCALAPPDATA%\FolderSize.log exists (create it empty to start
+// logging, delete it to stop). Each line is appended as UTF-8 text. The file must not be in a
+// folder shown in File Explorer while logging: writing to it is a change in that folder, which
+// makes the window read the folder again, which writes to the log again.
 static bool GetMeasureLogPath(WCHAR* pszPath)
 {
-	DWORD cch = GetTempPathW(MAX_PATH, pszPath);
-	if (cch == 0 || cch >= MAX_PATH - 20)
+	DWORD cch = ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\FolderSize.log", pszPath, MAX_PATH);
+	if (cch == 0 || cch > MAX_PATH)
 		return false;
-	lstrcatW(pszPath, L"FolderSize.log");
 	return GetFileAttributesW(pszPath) != INVALID_FILE_ATTRIBUTES;
 }
 
@@ -148,6 +149,30 @@ static void MeasureLog(LPCWSTR pszFormat, ...)
 		WriteFile(hFile, szUtf8, cb - 1, &cbWritten, NULL);
 		CloseHandle(hFile);
 	}
+}
+
+// Current time in microseconds, for the measurement log.
+static ULONGLONG MeasureNowUs()
+{
+	static LARGE_INTEGER frequency = {0};
+	if (frequency.QuadPart == 0)
+		QueryPerformanceFrequency(&frequency);
+	LARGE_INTEGER count;
+	QueryPerformanceCounter(&count);
+	return (ULONGLONG)(count.QuadPart / frequency.QuadPart * 1000000
+		+ count.QuadPart % frequency.QuadPart * 1000000 / frequency.QuadPart);
+}
+
+// CPU time used so far by the calling thread, in 100 ns units.
+static ULONGLONG GetThreadCpuTime()
+{
+	FILETIME ftCreation, ftExit, ftKernel, ftUser;
+	if (!GetThreadTimes(GetCurrentThread(), &ftCreation, &ftExit, &ftKernel, &ftUser))
+		return 0;
+	ULARGE_INTEGER kernel, user;
+	kernel.LowPart = ftKernel.dwLowDateTime; kernel.HighPart = ftKernel.dwHighDateTime;
+	user.LowPart = ftUser.dwLowDateTime; user.HighPart = ftUser.dwHighDateTime;
+	return kernel.QuadPart + user.QuadPart;
 }
 
 // CPU time used so far by the whole FolderSize.exe process (all threads), in 100 ns units.
@@ -303,6 +328,10 @@ DWORD FolderViewScanner::ThreadProc()
 						{
 							int index = 0;
 							LPITEMIDLIST pItemID;
+							// TEMPORARY measurement log: time spent in each step, in microseconds
+							ULONGLONG usStart = MeasureNowUs(), cpuStart = GetThreadCpuTime();
+							ULONGLONG usShellInfo = 0, usFileInfo = 0, usFolderSizes = 0, t;
+							int nFolders = 0;
 							while (WaitForSingleObject(m_hQuitEvent, 0) == WAIT_TIMEOUT && pEnum->Next(1, &pItemID, NULL) == S_OK)
 							{
 								nViewItems++;
@@ -314,9 +343,11 @@ DWORD FolderViewScanner::ThreadProc()
 									{
 										SHFILEINFO shfi;
 										shfi.dwAttributes = SFGAO_FILESYSTEM | SFGAO_FOLDER;
-										if (SHGetFileInfo(pPath, 0, &shfi, sizeof(shfi),
-											SHGFI_ATTRIBUTES | SHGFI_ATTR_SPECIFIED | SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON)
-											&& shfi.dwAttributes & SFGAO_FILESYSTEM)
+										t = MeasureNowUs();
+										BOOL bShellInfo = SHGetFileInfo(pPath, 0, &shfi, sizeof(shfi),
+											SHGFI_ATTRIBUTES | SHGFI_ATTR_SPECIFIED | SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0;
+										usShellInfo += MeasureNowUs() - t;
+										if (bShellInfo && shfi.dwAttributes & SFGAO_FILESYSTEM)
 										{
 											FOLDERINFO2 fi;
 											// Decide between folder and file from the file system attribute, not from
@@ -324,7 +355,9 @@ DWORD FolderViewScanner::ThreadProc()
 											// (.zip, and on Windows 11 .7z, .rar, .tar and others). Those are files on
 											// disk, which the service never scans, so asking it for their size returned
 											// nothing and the size column stayed empty.
+											t = MeasureNowUs();
 											DWORD dwFileAttributes = GetFileAttributes(pPath);
+											usFileInfo += MeasureNowUs() - t;
 											bool bIsDirectory = (dwFileAttributes != INVALID_FILE_ATTRIBUTES)
 												? (dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0
 												: (shfi.dwAttributes & SFGAO_FOLDER) != 0;
@@ -346,11 +379,16 @@ DWORD FolderViewScanner::ThreadProc()
 											}
 											else if (bIsDirectory)
 											{
+												t = MeasureNowUs();
 												GetInfoForFolder(pPath, fi);
+												usFolderSizes += MeasureNowUs() - t;
+												nFolders++;
 											}
 											else
 											{
+												t = MeasureNowUs();
 												GetLogicalFileSize(pPath, fi.nLogicalSize);
+												usFileInfo += MeasureNowUs() - t;
 												fi.giff = GIFF_CLEAN;
 											}
 
@@ -375,6 +413,11 @@ DWORD FolderViewScanner::ThreadProc()
 								CoTaskMemFree(pItemID);
 							}
 							pEnum->Release();
+							MeasureLog(L"  scanner: %d items in %d ms, thread CPU %d ms; icons and names %d ms, "
+								L"file attributes and sizes %d ms, folder sizes from the service %d ms (%d folders)",
+								(int)nViewItems, (int)((MeasureNowUs() - usStart) / 1000),
+								(int)((GetThreadCpuTime() - cpuStart) / 10000), (int)(usShellInfo / 1000),
+								(int)(usFileInfo / 1000), (int)(usFolderSizes / 1000), nFolders);
 						}
 						psf2->Release();
 					}
@@ -552,8 +595,16 @@ static const int SIZE_COLUMN_EXTRA_DIP = 3;
 static const int SORT_ARROW_MARGIN_DIP = 7;
 
 // Delay before reloading the folder after a change notification, in milliseconds. Changes
-// often come in bursts (moving many files); they are handled together after the burst.
+// often come in bursts (moving many files); they are handled together.
 static const UINT RELOAD_DELAY_MS = 300;
+
+// In a folder that keeps changing (such as the temporary files folder), a reload starts no
+// sooner than this many times the duration of the last scan after it ended, so a large folder
+// isn't read again and again without pause. Bounded by RELOAD_DELAY_MS and RELOAD_MAX_SPACING_MS:
+// a folder read in 20 ms is reloaded 300 ms after a change; one read in 400 ms, 4 s after the
+// previous reload at most.
+static const UINT RELOAD_SPACING_FACTOR = 10;
+static const UINT RELOAD_MAX_SPACING_MS = 5000;
 static const UINT_PTR RELOAD_TIMER_ID = 1;
 
 // While items arrive, the list is sorted and the window fitted to it at most this often, in
@@ -779,12 +830,25 @@ private:
 	LPCWSTR m_measureReason;      // why the current scan started: "open" or "reload"
 	ULONGLONG m_measureStartTick; // GetTickCount64 when it started
 	ULONGLONG m_measureStartCpu;  // GetProcessCpuTime when it started
+	ULONGLONG m_measureUiCpuStart; // GetThreadCpuTime of the window's thread when it started
+	ULONGLONG m_measureAddUs;     // time spent adding rows, in microseconds
+	ULONGLONG m_measureLayoutUs;  // time spent sorting and fitting, in microseconds
+	int m_measureBatches;         // number of batches of rows added
+	int m_measureLayouts;         // number of times the list was sorted and fitted
+
+	// Reloads after changes in the folder (see ScheduleReload)
+	void ScheduleReload();
+	ULONGLONG m_scanStartTick;    // GetTickCount64 when the current scan started
+	ULONGLONG m_lastScanEndTick;  // GetTickCount64 when the last scan ended
+	ULONGLONG m_lastScanMs;       // how long the last scan took, in milliseconds
+	bool m_bChangePending;        // the folder changed since the last reload started
+	bool m_bReloadTimerSet;       // RELOAD_TIMER_ID is set
 	set<wstring> m_staleItems; // while reloading: items not found again yet
 	CComPtr<IDispatch> m_pFolderView;  // File Explorer's view of the folder, for its EnumDone event
 	ULONG m_changeNotifyId;   // registration for change notifications of the folder (0 if none)
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bOtherLocation(false), m_measureReason(L"open"), m_measureStartTick(0), m_measureStartCpu(0), m_changeNotifyId(0)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bOtherLocation(false), m_measureReason(L"open"), m_measureStartTick(0), m_measureStartCpu(0), m_measureUiCpuStart(0), m_measureAddUs(0), m_measureLayoutUs(0), m_measureBatches(0), m_measureLayouts(0), m_scanStartTick(0), m_lastScanEndTick(0), m_lastScanMs(0), m_bChangePending(false), m_bReloadTimerSet(false), m_changeNotifyId(0)
 {
 	BrowserEvents::DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -847,6 +911,8 @@ LRESULT FSWindow::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHand
 {
 	StopWatchingFolderChanges();
 	KillTimer(RELOAD_TIMER_ID);
+	m_bReloadTimerSet = false;
+	m_bChangePending = false;
 	KillTimer(LAYOUT_TIMER_ID);
 	m_bLayoutPending = false;
 	if (m_lv)
@@ -1008,6 +1074,9 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 	std::vector<ListItem*> items = m_pScanner->GetNewItems();
 	if (!items.empty())
 	{
+		ULONGLONG usStart = MeasureNowUs();
+		m_measureBatches++;
+
 		// When reloading the same folder, items already in the list are updated in place, so
 		// the scroll position and the selection are kept. Map each listed item to its row once,
 		// instead of searching the list for each item.
@@ -1074,6 +1143,7 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 		}
 		// sorted and fitted shortly, once for all the batches that arrive meanwhile
 		ScheduleLayout();
+		m_measureAddUs += MeasureNowUs() - usStart;
 	}
 	return 0;
 }
@@ -1121,10 +1191,17 @@ LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 			m_measureReason, ListView_GetItemCount(m_lv), (int)lParam,
 			(int)(GetTickCount64() - m_measureStartTick),
 			(int)((GetProcessCpuTime() - m_measureStartCpu) / 10000), szName);
+		MeasureLog(L"  window: rows added in %d batches, %d ms; sorted and fitted %d times, %d ms; window thread CPU %d ms",
+			m_measureBatches, (int)(m_measureAddUs / 1000), m_measureLayouts, (int)(m_measureLayoutUs / 1000),
+			(int)((GetThreadCpuTime() - m_measureUiCpuStart) / 10000));
 		m_measureReason = L"open";
 	}
 
+	m_lastScanEndTick = GetTickCount64();
+	m_lastScanMs = m_lastScanEndTick - m_scanStartTick;
 	m_bScanDone = true;
+	if (m_bChangePending)
+		ScheduleReload();
 	m_nScannedViewItems = (UINT)lParam;
 	if (m_bCheckViewAfterScan)
 		CheckViewComplete();
@@ -1139,8 +1216,11 @@ void FSWindow::ApplyLayout()
 		KillTimer(LAYOUT_TIMER_ID);
 		m_bLayoutPending = false;
 	}
+	ULONGLONG usStart = MeasureNowUs();
 	ListView_SortItems(m_lv, GetCompareFunction(m_sort), 0);
 	AdjustSizeForList();
+	m_measureLayoutUs += MeasureNowUs() - usStart;
+	m_measureLayouts++;
 }
 
 void FSWindow::ScheduleLayout()
@@ -1189,8 +1269,12 @@ void FSWindow::StartScanner()
 {
 	m_bScanDone = false;
 	m_bCheckViewAfterScan = false;
-	m_measureStartTick = GetTickCount64();
+	m_scanStartTick = GetTickCount64();
+	m_measureStartTick = m_scanStartTick;
 	m_measureStartCpu = GetProcessCpuTime();
+	m_measureUiCpuStart = GetThreadCpuTime();
+	m_measureAddUs = m_measureLayoutUs = 0;
+	m_measureBatches = m_measureLayouts = 0;
 	m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd, ++m_scanGeneration);
 }
 
@@ -1203,7 +1287,10 @@ void FSWindow::Reload()
 		return;
 	if (m_pScanner)
 		m_pScanner->Quit();
-	m_bReloading = true;
+	// With an empty list there is nothing to match or remove: a plain scan is enough. This is the
+	// usual case right after entering a folder, when the first scan ran before File Explorer
+	// had listed anything (see CheckViewComplete).
+	m_bReloading = !m_nameMap.empty();
 	m_measureReason = L"reload";
 	m_staleItems.clear();
 	for (map<wstring, ListItem*>::iterator itr = m_nameMap.begin(); itr != m_nameMap.end(); itr++)
@@ -1278,8 +1365,29 @@ LRESULT FSWindow::OnShellChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& b
 	HANDLE hLock = SHChangeNotification_Lock((HANDLE)wParam, (DWORD)lParam, &ppidl, &lEvent);
 	if (hLock)
 		SHChangeNotification_Unlock(hLock);
-	SetTimer(RELOAD_TIMER_ID, RELOAD_DELAY_MS);
+	m_bChangePending = true;
+	ScheduleReload();
 	return 0;
+}
+
+// Sets the timer of the next reload after a change, unless it is already set or a scan is
+// running (OnEnumDone calls this again when the scan ends). The timer is not pushed back by
+// later changes, so a folder that keeps changing is still reloaded, at the spacing above.
+void FSWindow::ScheduleReload()
+{
+	if (m_bReloadTimerSet || !m_bScanDone)
+		return;
+	ULONGLONG spacing = m_lastScanMs * RELOAD_SPACING_FACTOR;
+	if (spacing < RELOAD_DELAY_MS)
+		spacing = RELOAD_DELAY_MS;
+	if (spacing > RELOAD_MAX_SPACING_MS)
+		spacing = RELOAD_MAX_SPACING_MS;
+	ULONGLONG elapsed = GetTickCount64() - m_lastScanEndTick;
+	ULONGLONG delay = spacing > elapsed ? spacing - elapsed : 0;
+	if (delay < RELOAD_DELAY_MS)
+		delay = RELOAD_DELAY_MS;
+	SetTimer(RELOAD_TIMER_ID, (UINT)delay);
+	m_bReloadTimerSet = true;
 }
 
 LRESULT FSWindow::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -1295,6 +1403,8 @@ LRESULT FSWindow::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandle
 		return 0;
 	}
 	KillTimer(RELOAD_TIMER_ID);
+	m_bReloadTimerSet = false;
+	m_bChangePending = false;
 	Reload();
 	return 0;
 }
@@ -1677,6 +1787,8 @@ void FSWindow::OnNavigateComplete(IDispatch* pDisp, VARIANT* URL)
 			m_pScanner->Quit();
 		m_pScanner = NULL;
 		KillTimer(RELOAD_TIMER_ID);
+		m_bReloadTimerSet = false;
+		m_bChangePending = false;
 		m_bReloading = false;
 		m_staleItems.clear();
 
