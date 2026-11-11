@@ -188,6 +188,8 @@ static ULONGLONG GetProcessCpuTime()
 	return kernel.QuadPart + user.QuadPart;
 }
 
+static LPITEMIDLIST GetBrowserFolder(IWebBrowser2* pWebBrowser);
+
 // Index in the system image list of the generic small folder or file icon, read once.
 static int GetGenericIcon(bool bFolder)
 {
@@ -327,6 +329,10 @@ DWORD FolderViewScanner::ThreadProc()
 					IShellFolder2* psf2;
 					if (SUCCEEDED(pfv->GetFolder(IID_IShellFolder2, (void**)&psf2)))
 					{
+						// psf2 is File Explorer's folder object, in File Explorer's process: each call
+						// on it goes to File Explorer and back. Open the same folder in this process to
+						// ask it about the items (psfLocal); keep psf2 only if that fails.
+						IShellFolder2* psfLocal = NULL;
 						IPersistFolder2* ppf2;
 						if (SUCCEEDED(psf2->QueryInterface(IID_IPersistFolder2, (void**)&ppf2)))
 						{
@@ -335,9 +341,13 @@ DWORD FolderViewScanner::ThreadProc()
 							{
 								if (!SHGetPathFromIDList(pFolderID, szFolder))
 									bThisPC = IsThisPC(pFolderID);
+								if (FAILED(SHBindToObject(NULL, pFolderID, NULL, IID_IShellFolder2, (void**)&psfLocal)))
+									psfLocal = NULL;
 								CoTaskMemFree(pFolderID);
 							}
+							ppf2->Release();
 						}
+						IShellFolder2* psf = psfLocal ? psfLocal : psf2;
 
 						// Other virtual locations (such as Home or Network) show nothing: their items could be
 						// anywhere, and asking for their sizes could start scans of whole drives.
@@ -350,11 +360,38 @@ DWORD FolderViewScanner::ThreadProc()
 							ULONGLONG usStart = MeasureNowUs(), cpuStart = GetThreadCpuTime();
 							ULONGLONG usShellInfo = 0, usFileInfo = 0, usFolderSizes = 0, t;
 							int nFolders = 0;
-							while (WaitForSingleObject(m_hQuitEvent, 0) == WAIT_TIMEOUT && pEnum->Next(1, &pItemID, NULL) == S_OK)
+							// The list of items comes from File Explorer's view, so it matches what it
+							// shows; take it 64 items at a time instead of one call to File Explorer each.
+							struct ItemBatch
+							{
+								IEnumIDList* pEnum;
+								LPITEMIDLIST items[64];
+								ULONG count, next;
+								bool Next(LPITEMIDLIST* ppItem)
+								{
+									if (next == count)
+									{
+										count = next = 0;
+										if (FAILED(pEnum->Next(64, items, &count)) || count == 0)
+											return false;
+									}
+									*ppItem = items[next++];
+									return true;
+								}
+								~ItemBatch()
+								{
+									// the items not taken (the scanner was stopped)
+									while (next < count)
+										CoTaskMemFree(items[next++]);
+								}
+							} batch;
+							batch.pEnum = pEnum;
+							batch.count = batch.next = 0;
+							while (WaitForSingleObject(m_hQuitEvent, 0) == WAIT_TIMEOUT && batch.Next(&pItemID))
 							{
 								nViewItems++;
 								STRRET strret;
-								if (SUCCEEDED(psf2->GetDisplayNameOf(pItemID, SHGDN_FORPARSING, &strret)))
+								if (SUCCEEDED(psf->GetDisplayNameOf(pItemID, SHGDN_FORPARSING, &strret)))
 								{
 									LPTSTR pPath;
 									if (SUCCEEDED(StrRetToStr(&strret, pItemID, &pPath)))
@@ -367,7 +404,7 @@ DWORD FolderViewScanner::ThreadProc()
 										t = MeasureNowUs();
 										LPCITEMIDLIST pChild = pItemID;
 										SFGAOF attributes = SFGAO_FILESYSTEM | SFGAO_FOLDER;
-										bool bAttributes = SUCCEEDED(psf2->GetAttributesOf(1, &pChild, &attributes));
+										bool bAttributes = SUCCEEDED(psf->GetAttributesOf(1, &pChild, &attributes));
 										usShellInfo += MeasureNowUs() - t;
 										if (bAttributes && attributes & SFGAO_FILESYSTEM)
 										{
@@ -422,7 +459,7 @@ DWORD FolderViewScanner::ThreadProc()
 											{
 												t = MeasureNowUs();
 												STRRET strretName;
-												if (SUCCEEDED(psf2->GetDisplayNameOf(pItemID, SHGDN_NORMAL, &strretName)))
+												if (SUCCEEDED(psf->GetDisplayNameOf(pItemID, SHGDN_NORMAL, &strretName)))
 													StrRetToBuf(&strretName, pItemID, szDisplayName, MAX_PATH);
 												usShellInfo += MeasureNowUs() - t;
 											}
@@ -456,6 +493,8 @@ DWORD FolderViewScanner::ThreadProc()
 								(int)((GetThreadCpuTime() - cpuStart) / 10000), (int)(usShellInfo / 1000),
 								(int)(usFileInfo / 1000), (int)(usFolderSizes / 1000), nFolders);
 						}
+						if (psfLocal)
+							psfLocal->Release();
 						psf2->Release();
 					}
 					pfv->Release();
@@ -1304,18 +1343,17 @@ LRESULT FSWindow::OnGetDispInfo(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
 int FSWindow::GetItemIcon(ListItem* pItem)
 {
 	ULONGLONG usStart = MeasureNowUs();
+	// The folder is opened in this process from its location. File Explorer's own folder object
+	// lives in File Explorer's process: the icon numbers it gives are places in File Explorer's
+	// list of icons, not in this process's one, and each call goes to File Explorer and back.
 	if (!m_pFolder)
 	{
-		CComQIPtr<IServiceProvider> psp(m_pWebBrowser);
-		CComPtr<IShellBrowser> psb;
-		CComPtr<IShellView> psv;
-		CComQIPtr<IFolderView> pfv;
-		if (psp && SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb))
-			&& SUCCEEDED(psb->QueryActiveShellView(&psv)))
+		LPITEMIDLIST pidl = GetBrowserFolder(m_pWebBrowser);
+		if (pidl)
 		{
-			pfv = psv;
-			if (pfv)
-				pfv->GetFolder(IID_IShellFolder, (void**)&m_pFolder);
+			if (FAILED(SHBindToObject(NULL, pidl, NULL, IID_IShellFolder, (void**)&m_pFolder)))
+				m_pFolder.Release();
+			CoTaskMemFree(pidl);
 		}
 	}
 	int icon = m_pFolder ? SHMapPIDLToSystemImageListIndex(m_pFolder, pItem->GetPidl(), NULL) : -1;
@@ -1846,13 +1884,14 @@ void FSWindow::AdjustSizeForList(bool bMeasureColumns)
 		RemeasureTextWidths();
 		bMeasureColumns = true;
 	}
+	// The list sizes its columns to its own width when it is resized (LVS_EX_AUTOSIZECOLUMNS).
+	// Turn that off until the window has been moved, or shrinking the window squeezes the columns.
+	ListView_SetExtendedListViewStyle(m_lv, dwExLvStyle & ~LVS_EX_AUTOSIZECOLUMNS);
 	if (bMeasureColumns || m_bColumnsGrew)
 	{
-		ListView_SetExtendedListViewStyle(m_lv, dwExLvStyle & ~LVS_EX_AUTOSIZECOLUMNS);
 		ListView_SetColumnWidth(m_lv, 0, LVSCW_AUTOSIZE);
 		ListView_SetColumnWidth(m_lv, 1, LVSCW_AUTOSIZE);
 		ListView_SetColumnWidth(m_lv, 1, ListView_GetColumnWidth(m_lv, 1) + MulDiv(SIZE_COLUMN_EXTRA_DIP, dpi, 96));
-		ListView_SetExtendedListViewStyle(m_lv, dwExLvStyle);
 		m_bColumnsGrew = false;
 	}
 
@@ -1911,6 +1950,8 @@ void FSWindow::AdjustSizeForList(bool bMeasureColumns)
 	GetWindowRect(&rcCurrent);
 	if (!EqualRect(&rc, &rcCurrent))
 		MoveWindow(rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+
+	ListView_SetExtendedListViewStyle(m_lv, dwExLvStyle);
 }
 
 
