@@ -112,28 +112,58 @@ static FolderKind GetFolderKind(LPCITEMIDLIST pidl)
 	return IsThisPC(pidl) ? FOLDER_THIS_PC : FOLDER_OTHER;
 }
 
-// TEMPORARY measurement log, to remove once the cost of entering a folder is measured.
-// Enabled only while the file %LOCALAPPDATA%\FolderSize.log exists (create it empty to start
-// logging, delete it to stop). Each line is appended as UTF-8 text. The file must not be in a
-// folder shown in File Explorer while logging: writing to it is a change in that folder, which
-// makes the window read the folder again, which writes to the log again.
+// Diagnostic log: the time and CPU spent reading each folder, to investigate slowness (see
+// Troubleshooting in README.md). There is no setting: it is enabled only while the file
+// %LOCALAPPDATA%\Folder Size Redux\FolderSize.log exists (create it empty to start logging,
+// delete it to stop). Each line is appended as UTF-8 text. When the file is missing, the cost is
+// one check for it per line that would be written.
+static const WCHAR DIAGNOSTIC_LOG_FOLDER[] = L"%LOCALAPPDATA%\\Folder Size Redux";
+static const WCHAR DIAGNOSTIC_LOG_FILE[] = L"%LOCALAPPDATA%\\Folder Size Redux\\FolderSize.log";
+
 static bool GetMeasureLogPath(WCHAR* pszPath)
 {
-	DWORD cch = ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\FolderSize.log", pszPath, MAX_PATH);
+	DWORD cch = ExpandEnvironmentStringsW(DIAGNOSTIC_LOG_FILE, pszPath, MAX_PATH);
 	if (cch == 0 || cch > MAX_PATH)
 		return false;
 	return GetFileAttributesW(pszPath) != INVALID_FILE_ATTRIBUTES;
 }
 
-static void MeasureLog(LPCWSTR pszFormat, ...)
+static bool IsDiagnosticLogEnabled()
 {
 	WCHAR szPath[MAX_PATH];
-	if (!GetMeasureLogPath(szPath))
+	return GetMeasureLogPath(szPath);
+}
+
+// Whether reading this folder is left out of the log: the folder of the log, and the folder
+// that holds it. Writing to the log is a change in its folder (and, through the folder's
+// date, in the folder above), which makes the window read that folder again, which would write
+// to the log again, without end.
+static bool IsDiagnosticLogFolder(LPCWSTR pszFolder)
+{
+	if (!pszFolder || !pszFolder[0])
+		return false;
+	WCHAR szLogFolder[MAX_PATH];
+	DWORD cch = ExpandEnvironmentStringsW(DIAGNOSTIC_LOG_FOLDER, szLogFolder, MAX_PATH);
+	if (cch == 0 || cch > MAX_PATH)
+		return false;
+	if (lstrcmpiW(pszFolder, szLogFolder) == 0)
+		return true;
+	PathRemoveFileSpecW(szLogFolder);
+	return lstrcmpiW(pszFolder, szLogFolder) == 0;
+}
+
+// Appends a line to the diagnostic log, if it is enabled and pszFolder (the folder the line is
+// about) isn't one left out (see IsDiagnosticLogFolder).
+static void MeasureLog(LPCWSTR pszFolder, LPCWSTR pszFormat, ...)
+{
+	WCHAR szPath[MAX_PATH];
+	if (!GetMeasureLogPath(szPath) || IsDiagnosticLogFolder(pszFolder))
 		return;
 	SYSTEMTIME st;
 	GetLocalTime(&st);
 	WCHAR szLine[1200];
-	int cch = wsprintfW(szLine, L"%02d:%02d:%02d.%03d ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+	int cch = wsprintfW(szLine, L"%04d-%02d-%02d %02d:%02d:%02d.%03d ", st.wYear, st.wMonth, st.wDay,
+		st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
 	va_list args;
 	va_start(args, pszFormat);
 	cch += wvsprintfW(szLine + cch, pszFormat, args);
@@ -152,7 +182,7 @@ static void MeasureLog(LPCWSTR pszFormat, ...)
 	}
 }
 
-// Current time in microseconds, for the measurement log.
+// Current time in microseconds, for the diagnostic log.
 static ULONGLONG MeasureNowUs()
 {
 	static LARGE_INTEGER frequency = {0};
@@ -356,7 +386,7 @@ DWORD FolderViewScanner::ThreadProc()
 						{
 							int index = 0;
 							LPITEMIDLIST pItemID;
-							// TEMPORARY measurement log: time spent in each step, in microseconds
+							// for the diagnostic log: time spent in each step, in microseconds
 							ULONGLONG usStart = MeasureNowUs(), cpuStart = GetThreadCpuTime();
 							ULONGLONG usShellInfo = 0, usFileInfo = 0, usFolderSizes = 0, t;
 							int nFolders = 0;
@@ -487,7 +517,7 @@ DWORD FolderViewScanner::ThreadProc()
 								CoTaskMemFree(pItemID);
 							}
 							pEnum->Release();
-							MeasureLog(L"  scanner: %d items in %d ms, thread CPU %d ms; attributes and names %d ms, "
+							MeasureLog(szFolder, L"  scanner: %d items in %d ms, thread CPU %d ms; attributes and names %d ms, "
 								L"file attributes and sizes %d ms, folder sizes from the service %d ms (%d folders)",
 								(int)nViewItems, (int)((MeasureNowUs() - usStart) / 1000),
 								(int)((GetThreadCpuTime() - cpuStart) / 10000), (int)(usShellInfo / 1000),
@@ -918,7 +948,7 @@ private:
 	CComPtr<IShellFolder> m_pFolder;
 	bool m_bOtherLocation;    // File Explorer shows a location the window doesn't show (hidden)
 
-	// TEMPORARY measurement log (see MeasureLog)
+	// diagnostic log (see MeasureLog)
 	void MeasureFolderName(WCHAR* pszName);
 	LPCWSTR m_measureReason;      // why the current scan started: "open" or "reload"
 	ULONGLONG m_measureStartTick; // GetTickCount64 when it started
@@ -1401,18 +1431,19 @@ LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 
 	ApplyLayout();
 
+	if (IsDiagnosticLogEnabled())
 	{
 		WCHAR szName[MAX_PATH];
 		MeasureFolderName(szName);
-		MeasureLog(L"%s done: %d rows, %d items in view when listed, %d ms, CPU %d ms, %s",
+		MeasureLog(szName, L"%s done: %d rows, %d items in view when listed, %d ms, CPU %d ms, %s",
 			m_measureReason, ListView_GetItemCount(m_lv), (int)lParam,
 			(int)(GetTickCount64() - m_measureStartTick),
 			(int)((GetProcessCpuTime() - m_measureStartCpu) / 10000), szName);
-		MeasureLog(L"  window: rows added in %d batches, %d ms; sorted and fitted %d times, %d ms; %d icons read, %d ms; window thread CPU %d ms",
+		MeasureLog(szName, L"  window: rows added in %d batches, %d ms; sorted and fitted %d times, %d ms; %d icons read, %d ms; window thread CPU %d ms",
 			m_measureBatches, (int)(m_measureAddUs / 1000), m_measureLayouts, (int)(m_measureLayoutUs / 1000),
 			m_measureIcons, (int)(m_measureIconUs / 1000), (int)((GetThreadCpuTime() - m_measureUiCpuStart) / 10000));
-		m_measureReason = L"open";
 	}
+	m_measureReason = L"open";
 
 	m_lastScanEndTick = GetTickCount64();
 	m_lastScanMs = m_lastScanEndTick - m_scanStartTick;
@@ -1487,8 +1518,13 @@ void FSWindow::CheckViewComplete()
 {
 	m_bCheckViewAfterScan = false;
 	UINT nViewItems = GetViewItemCount();
-	MeasureLog(L"File Explorer list done: %u items in view, %u when listed, %s",
-		nViewItems, m_nScannedViewItems, nViewItems != m_nScannedViewItems ? L"reloading" : L"no reload");
+	if (IsDiagnosticLogEnabled())
+	{
+		WCHAR szName[MAX_PATH];
+		MeasureFolderName(szName);
+		MeasureLog(szName, L"File Explorer list done: %u items in view, %u when listed, %s",
+			nViewItems, m_nScannedViewItems, nViewItems != m_nScannedViewItems ? L"reloading" : L"no reload");
+	}
 	if (nViewItems != m_nScannedViewItems)
 		Reload();
 }
@@ -1547,7 +1583,7 @@ static LPITEMIDLIST GetBrowserFolder(IWebBrowser2* pWebBrowser)
 	return pidl;
 }
 
-// Path of the folder, or "This PC", for the measurement log.
+// Path of the folder, or "This PC", for the diagnostic log.
 void FSWindow::MeasureFolderName(WCHAR* pszName)
 {
 	lstrcpyW(pszName, L"This PC");

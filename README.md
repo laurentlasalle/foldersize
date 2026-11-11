@@ -52,6 +52,27 @@ rights needed) and ends it when it exits. In this mode:
 - Settings... opens the control panel from its file; it doesn't appear in
   Control Panel.
 
+## Troubleshooting
+
+If the size window seems slow or busy, a diagnostic log shows how long
+reading each folder takes and where the time goes. It has no setting: it is
+written only while its file exists. To start it, run in PowerShell:
+
+```powershell
+New-Item -Force "$env:LOCALAPPDATA\Folder Size Redux\FolderSize.log"
+```
+
+Then browse the folders in question with File Explorer. Each reading of a
+folder adds a few lines to the file: the number of items, the time until the
+list is complete, the CPU time used, and the details of the scanner and of
+the window. The log's own folder and the folder above it
+(`%LOCALAPPDATA%`) are left out, as writing the log changes them. To stop,
+delete the file:
+
+```powershell
+Remove-Item "$env:LOCALAPPDATA\Folder Size Redux\FolderSize.log"
+```
+
 ## History
 
 The full CVS history of the original project (2005–2013) was imported from
