@@ -36,8 +36,8 @@ IDI_ICON                ICON                    "..\\common\\foldericon.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,1,0,1
- PRODUCTVERSION 2,6,0,0
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
  FILEFLAGSMASK 0x17L
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -52,14 +52,14 @@ BEGIN
     BEGIN
         BLOCK "080004b0"
         BEGIN
-            VALUE "CompanyName", "Brio"
-            VALUE "FileDescription", "Folder Size Window"
-            VALUE "FileVersion", "0, 1, 0, 1"
+            VALUE "CompanyName", "Laurent LaSalle"
+            VALUE "FileDescription", "Folder Size Redux"
+            VALUE "FileVersion", "0.1.0.0"
             VALUE "InternalName", "FolderSize"
-            VALUE "LegalCopyright", "Copyright © 2010"
+            VALUE "LegalCopyright", "Copyright (C) Brio, Laurent LaSalle. GNU GPL v2."
             VALUE "OriginalFilename", "FolderSize.exe"
-            VALUE "ProductName", "Folder Size"
-            VALUE "ProductVersion", "2, 6, 0, 0"
+            VALUE "ProductName", "Folder Size Redux"
+            VALUE "ProductVersion", "0.1.0.0"
         END
     END
     BLOCK "VarFileInfo"

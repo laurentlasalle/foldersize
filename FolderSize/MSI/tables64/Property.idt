@@ -2,7 +2,7 @@ Property	Value
 s72	l0
 Property	Property
 ALLUSERS	1
-ARPHELPLINK	http://foldersize.sourceforge.net
+ARPHELPLINK	https://github.com/laurentlasalle/foldersize
 ARPNOMODIFY	1
 ARPPRODUCTICON	FolderSize.ico
 BannerBitmap	bannrbmp
@@ -36,19 +36,20 @@ INSTALLLEVEL	3
 InfoIcon	info
 InstallMode	Typical
 InstallerIcon	insticon
-Manufacturer	Brio
+Manufacturer	Laurent LaSalle
 PIDTemplate	12345<###-%%%%%%%>@@@@@
 PROMPTROLLBACKCOST	P
-ProductCode	{F24FF688-7138-4CCF-A83F-71E9FB01170E}
+ProductCode	{E240B561-4D65-47E2-9174-CCCC144A9039}
 ProductID	none
 ProductLanguage	1033
-ProductName	Folder Size (64-bit)
-ProductVersion	2.6
+ProductName	Folder Size Redux
+ProductVersion	0.1.0
 Progress1	Installing
 Progress2	installs
 RemoveIcon	removico
 RepairIcon	repairic
+SecureCustomProperties	OLDFOLDERSIZE64;OLDFOLDERSIZE32;OLDREDUX
 Setup	Setup
 ShowUserRegistrationDlg	1
-UpgradeCode	{35863F41-0CDE-4488-9D22-92123A8B7948}
+UpgradeCode	{9E457F68-E38B-4CF7-9E4B-DD423014DC09}
 Wizard	Setup Wizard

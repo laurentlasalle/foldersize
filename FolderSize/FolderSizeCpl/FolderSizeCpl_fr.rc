@@ -58,9 +58,10 @@ STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION |
 CAPTION "A Propos"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
+    LTEXT           "Folder Size Redux est un fork de Folder Size pour Windows 2.6, maintenu par Laurent LaSalle.",IDC_STATIC,7,98,120,24
     LTEXT           "Folder Size pour Windows a été conçu et développé par Brian Oraas.",
                     IDC_STATIC,7,38,96,29
-    LTEXT           "Folder Size pour Windows 2.6",IDC_TITLE,7,7,189,22,
+    LTEXT           "Folder Size Redux 0.1",IDC_TITLE,7,7,189,22,
                     WS_TABSTOP
     PUSHBUTTON      "&Credits",IDC_CREDITS,7,79,50,14
     LTEXT           "Folder Size pour Windows est distribué selon l'accord de la Licence Publique GNU.",
@@ -137,8 +138,8 @@ END
 
 STRINGTABLE 
 BEGIN
-    IDS_NAME                "Folder Size"
-    IDS_INFO                "Personnalise la colonne Folder Size de l'Explorateur et modifier le service Folder Size."
+    IDS_NAME                "Folder Size Redux"
+    IDS_INFO                "Choisissez les lecteurs analysés par Folder Size Redux et contrôlez son service."
     IDS_SERVICE_RUNNING     "Démarré"
     IDS_SERVICE_STOPPED     "Arrêté"
     IDS_SERVICE_UNKNOWN     "Inconnu"

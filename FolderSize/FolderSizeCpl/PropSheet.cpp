@@ -269,7 +269,7 @@ INT_PTR CALLBACK AboutProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 		switch (LOWORD(wParam))
 		{
 		case IDC_TITLE:
-			ShellExecute(hwndDlg, TEXT("open"), TEXT("http://foldersize.sourceforge.net"), NULL, NULL, SW_SHOWNORMAL);
+			ShellExecute(hwndDlg, TEXT("open"), TEXT("https://github.com/laurentlasalle/foldersize"), NULL, NULL, SW_SHOWNORMAL);
 			return TRUE;
 		case IDC_CREDITS:
 			DialogBox(g_hInstance, MAKEINTRESOURCE(IDD_CREDITS), hwndDlg, CreditsProc);

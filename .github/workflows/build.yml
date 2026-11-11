@@ -43,13 +43,23 @@ jobs:
             $lines[$i] = $cols -join "`t"
           }
           Set-Content $table $lines -Encoding ascii
+
+          # Give every build its own product code and package code, so installing a new
+          # build replaces the previous one (major upgrade, see tables64\Upgrade.idt).
+          $productCode = [guid]::NewGuid().ToString('B').ToUpper()
+          $packageCode = [guid]::NewGuid().ToString('B').ToUpper()
+          (Get-Content tables64\Property.idt) -replace '^ProductCode\t.*', "ProductCode`t$productCode" |
+            Set-Content tables64\Property.idt -Encoding ascii
+          (Get-Content tables64\_SummaryInformation.idt) -replace '^9\t.*', "9`t$packageCode" |
+            Set-Content tables64\_SummaryInformation.idt -Encoding ascii
+
           cmd /c BuildMSI64.bat
           if (-not (Test-Path FolderSize64.msi)) { throw 'FolderSize64.msi was not created' }
 
       - name: Upload build
         uses: actions/upload-artifact@v5
         with:
-          name: FolderSize-x64
+          name: FolderSizeRedux-x64
           if-no-files-found: error
           path: |
             FolderSize/MSI/FolderSize64.msi

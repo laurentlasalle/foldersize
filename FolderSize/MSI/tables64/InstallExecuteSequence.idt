@@ -43,7 +43,7 @@ RegisterTypeLibraries		5500
 RegisterUser		6000
 RemoveDuplicateFiles		3400
 RemoveEnvironmentStrings		3300
-RemoveExistingProducts		6700
+RemoveExistingProducts		1501
 RemoveFSWindow	REMOVE~="ALL"	1300
 RemoveFiles		3500
 RemoveFolders		3600

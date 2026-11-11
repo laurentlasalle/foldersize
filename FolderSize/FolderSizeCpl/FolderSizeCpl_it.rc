@@ -32,9 +32,10 @@ STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION |
 CAPTION "Informazioni"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
+    LTEXT           "Folder Size Redux is a fork of Folder Size for Windows 2.6, maintained by Laurent LaSalle.",IDC_STATIC,7,98,120,24
     LTEXT           "Dimensione Cartelle per Windows è stato concepito, progettato e implementato da Brian Oraas.",
                     IDC_STATIC,7,38,96,34
-    LTEXT           "Dimensione Cartelle per Windows 2.6",IDC_TITLE,7,7,198,
+    LTEXT           "Folder Size Redux 0.1",IDC_TITLE,7,7,198,
                     22,WS_TABSTOP
     PUSHBUTTON      "&Credits",IDC_CREDITS,7,79,50,14
     LTEXT           "Dimensione Cartelle per Windows è rilasciato attraverso gli accordi della Licenza Pubblica GNU.",
@@ -135,7 +136,7 @@ END
 
 STRINGTABLE 
 BEGIN
-    IDS_NAME                "Folder Size"
+    IDS_NAME                "Folder Size Redux"
     IDS_INFO                "Personalizza la colonna Dimensione Cartelle di Esplora Risorse e controlla il servizio Dimensione Cartelle."
     IDS_SERVICE_RUNNING     "Attivo"
     IDS_SERVICE_STOPPED     "Disattivo"

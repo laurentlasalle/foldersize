@@ -4,7 +4,10 @@
 #define WM_NOTIFYICON (WM_APP + 1)
 #define WM_KILLWINDOW (WM_APP + 2)
 
-#define APP_NAME _T("Folder Size")
+#define APP_NAME _T("Folder Size Redux")
+// Name of the value under the Run key for "Start on Windows startup". Kept from the original
+// Folder Size so the setting carries over when Folder Size Redux replaces it.
+#define AUTORUN_VALUE_NAME _T("Folder Size")
 #define SHELL_WINDOW_CLASS_NAME _T("FolderSizeShellWindow")
 #define REG_KEY_PATH _T("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
 
@@ -1214,7 +1217,7 @@ LRESULT ShellWindowManager::OnAppIconMsg(UINT uMsg, WPARAM wParam, LPARAM lParam
 			HKEY hKey;
 			if (RegCreateKey(HKEY_CURRENT_USER, REG_KEY_PATH, &hKey) == ERROR_SUCCESS)
 			{
-				if (RegQueryValueEx(hKey, APP_NAME, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+				if (RegQueryValueEx(hKey, AUTORUN_VALUE_NAME, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
 				{
 					mii.fState = MFS_CHECKED;
 					SetMenuItemInfo(hSubMenu, ID_START, FALSE, &mii);
@@ -1323,12 +1326,12 @@ static void SetAutoRun()
 {
 	TCHAR szFile[MAX_PATH];
 	DWORD dw = GetModuleFileName(NULL, szFile, MAX_PATH);
-	SHSetValue(HKEY_CURRENT_USER, REG_KEY_PATH, APP_NAME, REG_SZ, szFile, dw * sizeof(WCHAR));
+	SHSetValue(HKEY_CURRENT_USER, REG_KEY_PATH, AUTORUN_VALUE_NAME, REG_SZ, szFile, dw * sizeof(WCHAR));
 }
 
 static void DeleteAutoRun()
 {
-	SHDeleteValue(HKEY_CURRENT_USER, REG_KEY_PATH, APP_NAME);
+	SHDeleteValue(HKEY_CURRENT_USER, REG_KEY_PATH, AUTORUN_VALUE_NAME);
 }
 
 LRESULT ShellWindowManager::OnStart(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
