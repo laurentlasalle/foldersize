@@ -1,0 +1,11 @@
+# Build output (see FolderSize/FolderSize.props)
+FolderSize/Debug/
+FolderSize/Release/
+FolderSize/obj/
+FolderSize/MSI/*.msi
+FolderSize/MSI/*.cab
+
+# Visual Studio user files
+.vs/
+*.user
+*.aps

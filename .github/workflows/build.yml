@@ -1,0 +1,58 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build (Release x64)
+        shell: pwsh
+        run: |
+          msbuild FolderSize\FolderSize.sln /m /nologo /v:minimal `
+            /p:Configuration=Release /p:Platform=x64 `
+            "/flp:logfile=build-errors.log;errorsonly"
+          $code = $LASTEXITCODE
+          # Report each compiler/linker error as an annotation, so errors are
+          # visible on the run summary page without opening the full log.
+          if ($code -ne 0 -and (Test-Path build-errors.log)) {
+            Get-Content build-errors.log | Select-Object -Unique | ForEach-Object { "::error::$_" }
+          }
+          exit $code
+
+      - name: Build installer (FolderSize64.msi)
+        shell: pwsh
+        working-directory: FolderSize\MSI
+        run: |
+          # The installer's File table records each file's size; update it
+          # to match the files that were just built.
+          $table = 'tables64\File.idt'
+          $lines = Get-Content $table
+          for ($i = 3; $i -lt $lines.Count; $i++) {
+            if (-not $lines[$i]) { continue }
+            $cols = $lines[$i] -split "`t"
+            $name = ($cols[2] -split '\|')[-1]
+            $cols[3] = (Get-Item "..\Release\x64\$name").Length
+            $lines[$i] = $cols -join "`t"
+          }
+          Set-Content $table $lines -Encoding ascii
+          cmd /c BuildMSI64.bat
+          if (-not (Test-Path FolderSize64.msi)) { throw 'FolderSize64.msi was not created' }
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FolderSize-x64
+          path: |
+            FolderSize/MSI/FolderSize64.msi
+            FolderSize/Release/x64/FolderSize.exe
+            FolderSize/Release/x64/FolderSizeSvc.exe
+            FolderSize/Release/x64/FolderSize.cpl
+            FolderSize/Release/x64/CLClient.exe
