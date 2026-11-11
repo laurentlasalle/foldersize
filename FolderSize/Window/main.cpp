@@ -115,8 +115,9 @@ static FolderKind GetFolderKind(LPCITEMIDLIST pidl)
 // Diagnostic log: the time and CPU spent reading each folder, to investigate slowness (see
 // Troubleshooting in README.md). There is no setting: it is enabled only while the file
 // %LOCALAPPDATA%\Folder Size Redux\FolderSize.log exists (create it empty to start logging,
-// delete it to stop). Each line is appended as UTF-8 text. When the file is missing, the cost is
-// one check for it per line that would be written.
+// delete it to stop). Each line is appended as UTF-8 text. Whether the file exists is checked
+// once when a reading of a folder starts (FSWindow::StartScanner); when it doesn't, the steps
+// aren't timed and nothing else is done for the log.
 static const WCHAR DIAGNOSTIC_LOG_FOLDER[] = L"%LOCALAPPDATA%\\Folder Size Redux";
 static const WCHAR DIAGNOSTIC_LOG_FILE[] = L"%LOCALAPPDATA%\\Folder Size Redux\\FolderSize.log";
 
@@ -194,6 +195,13 @@ static ULONGLONG MeasureNowUs()
 		+ count.QuadPart % frequency.QuadPart * 1000000 / frequency.QuadPart);
 }
 
+// MeasureNowUs when the diagnostic log is enabled for the current reading, 0 otherwise: the
+// time is then not read at all, and the differences computed from it are 0.
+static ULONGLONG MeasureNowIf(bool bLog)
+{
+	return bLog ? MeasureNowUs() : 0;
+}
+
 // CPU time used so far by the calling thread, in 100 ns units.
 static ULONGLONG GetThreadCpuTime()
 {
@@ -248,7 +256,7 @@ static int GetGenericIcon(bool bFolder)
 class FolderViewScanner
 {
 public:
-	FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost, UINT generation);
+	FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost, UINT generation, bool bLog);
 	~FolderViewScanner();
 
 	std::vector<ListItem*> GetNewItems();
@@ -264,6 +272,7 @@ private:
 	IStream* m_pBrowserStream;
 	HWND m_hWndPost;
 	UINT m_generation;
+	bool m_bLog;  // the diagnostic log is enabled for this reading (see MeasureLog)
 
 	HANDLE m_hThread;
 	HANDLE m_hQuitEvent;
@@ -273,7 +282,7 @@ private:
 	std::vector<RefreshItem*> m_refreshItems;
 };
 
-FolderViewScanner::FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost, UINT generation) : m_pBrowserStream(NULL), m_hWndPost(hWndPost), m_generation(generation), m_hThread(NULL), m_hQuitEvent(NULL)
+FolderViewScanner::FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost, UINT generation, bool bLog) : m_pBrowserStream(NULL), m_hWndPost(hWndPost), m_generation(generation), m_bLog(bLog), m_hThread(NULL), m_hQuitEvent(NULL)
 {
 	InitializeCriticalSection(&m_cs);
 	m_hQuitEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -387,7 +396,7 @@ DWORD FolderViewScanner::ThreadProc()
 							int index = 0;
 							LPITEMIDLIST pItemID;
 							// for the diagnostic log: time spent in each step, in microseconds
-							ULONGLONG usStart = MeasureNowUs(), cpuStart = GetThreadCpuTime();
+							ULONGLONG usStart = MeasureNowIf(m_bLog), cpuStart = m_bLog ? GetThreadCpuTime() : 0;
 							ULONGLONG usShellInfo = 0, usFileInfo = 0, usFolderSizes = 0, t;
 							int nFolders = 0;
 							// The list of items comes from File Explorer's view, so it matches what it
@@ -431,11 +440,11 @@ DWORD FolderViewScanner::ThreadProc()
 										// for each item. The icon isn't read here: only the rows shown need one,
 										// and reading it can be slow (a program's icon is read from its file).
 										// See FSWindow::OnGetDispInfo.
-										t = MeasureNowUs();
+										t = MeasureNowIf(m_bLog);
 										LPCITEMIDLIST pChild = pItemID;
 										SFGAOF attributes = SFGAO_FILESYSTEM | SFGAO_FOLDER;
 										bool bAttributes = SUCCEEDED(psf->GetAttributesOf(1, &pChild, &attributes));
-										usShellInfo += MeasureNowUs() - t;
+										usShellInfo += MeasureNowIf(m_bLog) - t;
 										if (bAttributes && attributes & SFGAO_FILESYSTEM)
 										{
 											FOLDERINFO2 fi;
@@ -444,9 +453,9 @@ DWORD FolderViewScanner::ThreadProc()
 											// (.zip, and on Windows 11 .7z, .rar, .tar and others). Those are files on
 											// disk, which the service never scans, so asking it for their size returned
 											// nothing and the size column stayed empty.
-											t = MeasureNowUs();
+											t = MeasureNowIf(m_bLog);
 											DWORD dwFileAttributes = GetFileAttributes(pPath);
-											usFileInfo += MeasureNowUs() - t;
+											usFileInfo += MeasureNowIf(m_bLog) - t;
 											bool bIsDirectory = (dwFileAttributes != INVALID_FILE_ATTRIBUTES)
 												? (dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0
 												: (attributes & SFGAO_FOLDER) != 0;
@@ -468,16 +477,16 @@ DWORD FolderViewScanner::ThreadProc()
 											}
 											else if (bIsDirectory)
 											{
-												t = MeasureNowUs();
+												t = MeasureNowIf(m_bLog);
 												GetInfoForFolder(pPath, fi);
-												usFolderSizes += MeasureNowUs() - t;
+												usFolderSizes += MeasureNowIf(m_bLog) - t;
 												nFolders++;
 											}
 											else
 											{
-												t = MeasureNowUs();
+												t = MeasureNowIf(m_bLog);
 												GetLogicalFileSize(pPath, fi.nLogicalSize);
-												usFileInfo += MeasureNowUs() - t;
+												usFileInfo += MeasureNowIf(m_bLog) - t;
 												fi.giff = GIFF_CLEAN;
 											}
 
@@ -487,11 +496,11 @@ DWORD FolderViewScanner::ThreadProc()
 											szDisplayName[0] = '\0';
 											if (bIsDirectory)
 											{
-												t = MeasureNowUs();
+												t = MeasureNowIf(m_bLog);
 												STRRET strretName;
 												if (SUCCEEDED(psf->GetDisplayNameOf(pItemID, SHGDN_NORMAL, &strretName)))
 													StrRetToBuf(&strretName, pItemID, szDisplayName, MAX_PATH);
-												usShellInfo += MeasureNowUs() - t;
+												usShellInfo += MeasureNowIf(m_bLog) - t;
 											}
 											if (!szDisplayName[0])
 												lstrcpyn(szDisplayName, PathFindFileName(pPath), MAX_PATH);
@@ -517,9 +526,10 @@ DWORD FolderViewScanner::ThreadProc()
 								CoTaskMemFree(pItemID);
 							}
 							pEnum->Release();
-							MeasureLog(szFolder, L"  scanner: %d items in %d ms, thread CPU %d ms; attributes and names %d ms, "
+							if (m_bLog)
+								MeasureLog(szFolder, L"  scanner: %d items in %d ms, thread CPU %d ms; attributes and names %d ms, "
 								L"file attributes and sizes %d ms, folder sizes from the service %d ms (%d folders)",
-								(int)nViewItems, (int)((MeasureNowUs() - usStart) / 1000),
+								(int)nViewItems, (int)((MeasureNowIf(m_bLog) - usStart) / 1000),
 								(int)((GetThreadCpuTime() - cpuStart) / 10000), (int)(usShellInfo / 1000),
 								(int)(usFileInfo / 1000), (int)(usFolderSizes / 1000), nFolders);
 						}
@@ -947,6 +957,7 @@ private:
 	// The folder shown in File Explorer, to read the icons of the rows (see GetItemIcon).
 	CComPtr<IShellFolder> m_pFolder;
 	bool m_bOtherLocation;    // File Explorer shows a location the window doesn't show (hidden)
+	bool m_bLogEnabled;       // the diagnostic log is enabled for the current reading (see MeasureLog)
 
 	// diagnostic log (see MeasureLog)
 	void MeasureFolderName(WCHAR* pszName);
@@ -973,7 +984,7 @@ private:
 	ULONG m_changeNotifyId;   // registration for change notifications of the folder (0 if none)
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bSortNeeded(false), m_nameTextMax(0), m_sizeTextMax(0), m_bColumnsGrew(false), m_bTextWidthsStale(false), m_measureIconUs(0), m_measureIcons(0), m_bOtherLocation(false), m_measureReason(L"open"), m_measureStartTick(0), m_measureStartCpu(0), m_measureUiCpuStart(0), m_measureAddUs(0), m_measureLayoutUs(0), m_measureBatches(0), m_measureLayouts(0), m_scanStartTick(0), m_lastScanEndTick(0), m_lastScanMs(0), m_bChangePending(false), m_bReloadTimerSet(false), m_changeNotifyId(0)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bSortNeeded(false), m_nameTextMax(0), m_sizeTextMax(0), m_bColumnsGrew(false), m_bTextWidthsStale(false), m_measureIconUs(0), m_measureIcons(0), m_bOtherLocation(false), m_bLogEnabled(false), m_measureReason(L"open"), m_measureStartTick(0), m_measureStartCpu(0), m_measureUiCpuStart(0), m_measureAddUs(0), m_measureLayoutUs(0), m_measureBatches(0), m_measureLayouts(0), m_scanStartTick(0), m_lastScanEndTick(0), m_lastScanMs(0), m_bChangePending(false), m_bReloadTimerSet(false), m_changeNotifyId(0)
 {
 	BrowserEvents::DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -1212,7 +1223,7 @@ bool FSWindow::AddPendingRows()
 	if (items.empty())
 		return false;
 	{
-		ULONGLONG usStart = MeasureNowUs();
+		ULONGLONG usStart = MeasureNowIf(m_bLogEnabled);
 		m_measureBatches++;
 
 		// to measure the width of the new texts (see NoteTextWidths)
@@ -1288,7 +1299,7 @@ bool FSWindow::AddPendingRows()
 		SelectObject(hdc, hOldFont);
 		::ReleaseDC(m_lv, hdc);
 		m_bSortNeeded = true;
-		m_measureAddUs += MeasureNowUs() - usStart;
+		m_measureAddUs += MeasureNowIf(m_bLogEnabled) - usStart;
 	}
 	return true;
 }
@@ -1372,7 +1383,7 @@ LRESULT FSWindow::OnGetDispInfo(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
 // does: custom folder icons (desktop.ini) and the icons of programs are included.
 int FSWindow::GetItemIcon(ListItem* pItem)
 {
-	ULONGLONG usStart = MeasureNowUs();
+	ULONGLONG usStart = MeasureNowIf(m_bLogEnabled);
 	// The folder is opened in this process from its location. File Explorer's own folder object
 	// lives in File Explorer's process: the icon numbers it gives are places in File Explorer's
 	// list of icons, not in this process's one, and each call goes to File Explorer and back.
@@ -1389,7 +1400,7 @@ int FSWindow::GetItemIcon(ListItem* pItem)
 	int icon = m_pFolder ? SHMapPIDLToSystemImageListIndex(m_pFolder, pItem->GetPidl(), NULL) : -1;
 	if (icon < 0)
 		icon = GetGenericIcon(pItem->IsFolder());
-	m_measureIconUs += MeasureNowUs() - usStart;
+	m_measureIconUs += MeasureNowIf(m_bLogEnabled) - usStart;
 	m_measureIcons++;
 	return icon;
 }
@@ -1431,7 +1442,7 @@ LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 
 	ApplyLayout();
 
-	if (IsDiagnosticLogEnabled())
+	if (m_bLogEnabled)
 	{
 		WCHAR szName[MAX_PATH];
 		MeasureFolderName(szName);
@@ -1467,7 +1478,7 @@ void FSWindow::ApplyLayout()
 	// Add the waiting rows and sort with drawing suspended, so the list is drawn once after.
 	::SendMessage(m_lv, WM_SETREDRAW, FALSE, 0);
 	AddPendingRows();
-	ULONGLONG usStart = MeasureNowUs();
+	ULONGLONG usStart = MeasureNowIf(m_bLogEnabled);
 	bool bChanged = m_bSortNeeded;
 	if (m_bSortNeeded)
 	{
@@ -1479,7 +1490,7 @@ void FSWindow::ApplyLayout()
 		::InvalidateRect(m_lv, NULL, FALSE);
 	// Size the columns only if a new text is wider than they are.
 	AdjustSizeForList(false);
-	m_measureLayoutUs += MeasureNowUs() - usStart;
+	m_measureLayoutUs += MeasureNowIf(m_bLogEnabled) - usStart;
 	m_measureLayouts++;
 }
 
@@ -1518,7 +1529,7 @@ void FSWindow::CheckViewComplete()
 {
 	m_bCheckViewAfterScan = false;
 	UINT nViewItems = GetViewItemCount();
-	if (IsDiagnosticLogEnabled())
+	if (m_bLogEnabled)
 	{
 		WCHAR szName[MAX_PATH];
 		MeasureFolderName(szName);
@@ -1536,12 +1547,13 @@ void FSWindow::StartScanner()
 	m_bCheckViewAfterScan = false;
 	m_scanStartTick = GetTickCount64();
 	m_measureStartTick = m_scanStartTick;
-	m_measureStartCpu = GetProcessCpuTime();
-	m_measureUiCpuStart = GetThreadCpuTime();
+	m_bLogEnabled = IsDiagnosticLogEnabled();  // the only check for the log during this reading
+	m_measureStartCpu = m_bLogEnabled ? GetProcessCpuTime() : 0;
+	m_measureUiCpuStart = m_bLogEnabled ? GetThreadCpuTime() : 0;
 	m_measureAddUs = m_measureLayoutUs = m_measureIconUs = 0;
 	m_measureBatches = m_measureLayouts = m_measureIcons = 0;
 	m_pFolder.Release();  // read again from the view when an icon is needed
-	m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd, ++m_scanGeneration);
+	m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd, ++m_scanGeneration, m_bLogEnabled);
 }
 
 // Reads the folder again after a change (file created, deleted, renamed, moved to the Recycle
