@@ -685,6 +685,11 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 	ListView_SetExtendedListViewStyle(m_lv, LVS_EX_FULLROWSELECT | LVS_EX_AUTOSIZECOLUMNS | LVS_EX_DOUBLEBUFFER);
 
 	SetWindowSubclass(m_lv, ListViewSubclassProc, 0, (DWORD_PTR)&m_headerState);
+
+	// Let the settings broadcast through even when this program runs with more rights than the
+	// control panel (for example when it was started by the installer): Windows otherwise
+	// blocks messages from a process with fewer rights, and the window would keep its language.
+	ChangeWindowMessageFilterEx(m_hWnd, WM_SETTINGSCHANGED, MSGFLT_ALLOW, NULL);
 	ApplyTheme();
 	UpdateFontForDpi();
 
