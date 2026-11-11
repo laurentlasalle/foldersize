@@ -38,6 +38,11 @@ INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			CheckDlgButton(hwndDlg, IDC_DISPLAY_CD, DriveTypes & SCANDRIVETYPE_CD ? BST_CHECKED : BST_UNCHECKED);
 			CheckDlgButton(hwndDlg, IDC_DISPLAY_REMOVABLE, DriveTypes & SCANDRIVETYPE_REMOVABLE ? BST_CHECKED : BST_UNCHECKED);
 			CheckDlgButton(hwndDlg, IDC_DISPLAY_NETWORK, DriveTypes & SCANDRIVETYPE_NETWORK ? BST_CHECKED : BST_UNCHECKED);
+
+			// load the default sort of the window
+			int Sort = LoadDefaultSort();
+			CheckRadioButton(hwndDlg, IDC_SORT_NAME, IDC_SORT_SIZE,
+				Sort == SORT_SIZE ? IDC_SORT_SIZE : Sort == SORT_NAME_MIXED ? IDC_SORT_NAME_MIXED : IDC_SORT_NAME);
 			return TRUE;
 		}
 	case WM_COMMAND:
@@ -47,6 +52,9 @@ INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 		case IDC_DISPLAY_CD:
 		case IDC_DISPLAY_REMOVABLE:
 		case IDC_DISPLAY_NETWORK:
+		case IDC_SORT_NAME:
+		case IDC_SORT_NAME_MIXED:
+		case IDC_SORT_SIZE:
 			PropSheet_Changed(GetParent(hwndDlg), hwndDlg);
 			break;
 		}
@@ -58,6 +66,13 @@ INT_PTR CALLBACK DisplayProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			{
 			case PSN_APPLY:
 				// read the settings and write them to the registry
+				if (IsDlgButtonChecked(hwndDlg, IDC_SORT_SIZE) == BST_CHECKED)
+					SaveDefaultSort(SORT_SIZE);
+				else if (IsDlgButtonChecked(hwndDlg, IDC_SORT_NAME_MIXED) == BST_CHECKED)
+					SaveDefaultSort(SORT_NAME_MIXED);
+				else
+					SaveDefaultSort(SORT_NAME);
+
 				int DriveTypes = 0;
 				if (IsDlgButtonChecked(hwndDlg, IDC_DISPLAY_LOCAL) == BST_CHECKED)
 					DriveTypes |= SCANDRIVETYPE_LOCAL;

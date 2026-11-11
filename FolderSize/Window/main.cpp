@@ -1,5 +1,6 @@
 #include "StdAfx.h"
 #include "resource.h"
+#include "..\\Common\\Settings.h"
 
 #define WM_NOTIFYICON (WM_APP + 1)
 #define WM_KILLWINDOW (WM_APP + 2)
@@ -82,12 +83,15 @@ private:
 
 #define WM_NEWITEMS      (WM_APP + 1)
 #define WM_REFRESHITEMS  (WM_APP + 2)
+// Posted by a scanner when it has listed all the items of the folder. wParam is the scanner's
+// generation number, so the window can ignore messages from scanners it has replaced.
+#define WM_ENUMDONE      (WM_APP + 4)
 
 
 class FolderViewScanner
 {
 public:
-	FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost);
+	FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost, UINT generation);
 	~FolderViewScanner();
 
 	std::vector<ListItem*> GetNewItems();
@@ -102,6 +106,7 @@ private:
 	// The web browser object of the Explorer tab, marshaled for use in the scanner thread.
 	IStream* m_pBrowserStream;
 	HWND m_hWndPost;
+	UINT m_generation;
 
 	HANDLE m_hThread;
 	HANDLE m_hQuitEvent;
@@ -111,7 +116,7 @@ private:
 	std::vector<RefreshItem*> m_refreshItems;
 };
 
-FolderViewScanner::FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost) : m_pBrowserStream(NULL), m_hWndPost(hWndPost), m_hThread(NULL), m_hQuitEvent(NULL)
+FolderViewScanner::FolderViewScanner(IWebBrowser2* pWebBrowser, HWND hWndPost, UINT generation) : m_pBrowserStream(NULL), m_hWndPost(hWndPost), m_generation(generation), m_hThread(NULL), m_hQuitEvent(NULL)
 {
 	InitializeCriticalSection(&m_cs);
 	m_hQuitEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -245,7 +250,12 @@ DWORD FolderViewScanner::ThreadProc()
 											}
 
 											// the ListItem takes ownership of the PIDL
-											ListItem* pItem = new ListItem(PathFindFileName(pPath), pItemID, fi, index++, shfi.iIcon, shfi.szDisplayName, bIsDirectory);
+											ListItem* pItem = new ListItem(PathFindFileName(pPath), pItemID, fi, index++, shfi.iIcon,
+												// Files are shown with their real name, extension included, even when
+												// File Explorer hides extensions: a folder and a .zip file with the same
+												// name can then be told apart. Folders keep the name File Explorer shows
+												// (some system folders show a localized name).
+												bIsDirectory ? shfi.szDisplayName : PathFindFileName(pPath), bIsDirectory);
 											pItemID = NULL;
 
 											EnterCriticalSection(&m_cs);
@@ -271,6 +281,9 @@ DWORD FolderViewScanner::ThreadProc()
 		}
 		psp->Release();
 	}
+
+	if (WaitForSingleObject(m_hQuitEvent, 0) == WAIT_TIMEOUT)
+		PostMessage(m_hWndPost, WM_ENUMDONE, m_generation, 0);
 
 	if (!szFolder[0])
 	{
@@ -430,6 +443,16 @@ static const int LIST_MARGIN_X_DIP = 3;
 // left edge and "Name".
 static const int SIZE_COLUMN_EXTRA_DIP = 3;
 
+// Width of an empty last column, in DIPs. The list leaves almost no space at the right of a
+// right-aligned column, so without it the sizes would touch the scroll bar.
+static const int SIZE_COLUMN_RIGHT_PADDING_DIP = 3;
+
+// Delay before reloading the folder after a change notification, in milliseconds. Changes
+// often come in bursts (moving many files); they are handled together after the burst.
+static const UINT RELOAD_DELAY_MS = 300;
+static const UINT_PTR RELOAD_TIMER_ID = 1;
+#define WM_SHELLCHANGE (WM_APP + 5)
+
 // Colors of the list in dark mode, matching the dark File Explorer.
 static const COLORREF DARK_BACKGROUND = RGB(0x19, 0x19, 0x19);
 static const COLORREF DARK_TEXT = RGB(0xFF, 0xFF, 0xFF);
@@ -486,9 +509,8 @@ static HWND FindTabWindow(HWND hwnd)
 	return NULL;
 }
 
-int CALLBACK compareIndex(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort);
-int CALLBACK compareName(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort);
-int CALLBACK compareSize(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort);
+
+static PFNLVCOMPARE GetCompareFunction(int sort);
 
 class FSWindow :
 	public CWindowImpl<FSWindow, CWindow, CWinTraits<WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX, WS_EX_TOOLWINDOW> >,
@@ -509,6 +531,9 @@ BEGIN_MSG_MAP(FSWindow)
 	MESSAGE_HANDLER(WM_SETTINGCHANGE, OnSettingChange)
 	MESSAGE_HANDLER(WM_NEWITEMS, OnNewItems)
 	MESSAGE_HANDLER(WM_REFRESHITEMS, OnRefreshItems)
+	MESSAGE_HANDLER(WM_ENUMDONE, OnEnumDone)
+	MESSAGE_HANDLER(WM_SHELLCHANGE, OnShellChange)
+	MESSAGE_HANDLER(WM_TIMER, OnTimer)
 	MESSAGE_HANDLER(WM_CLOSE, OnClose)
 	NOTIFY_HANDLER(1, LVN_ITEMACTIVATE, OnItemActivate)
 	NOTIFY_HANDLER(1, LVN_COLUMNCLICK, OnColumnClick)
@@ -523,6 +548,9 @@ END_MSG_MAP()
 	LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnShellChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnClose(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnItemActivate(int idCtrl, LPNMHDR pnmh, BOOL& bHandled);
 	LRESULT OnColumnClick(int idCtrl, LPNMHDR pnmh, BOOL& bHandled);
@@ -548,6 +576,11 @@ private:
 	void UpdateFontForDpi();
 	void ApplyTheme();
 	int GetListMarginX();
+	void ApplySort();
+	void StartScanner();
+	void Reload();
+	void WatchFolderChanges();
+	void StopWatchingFolderChanges();
 	COLORREF GetBackgroundColor() const;
 
 	HWND m_lv;
@@ -559,10 +592,14 @@ private:
 	TCHAR m_szFolder[MAX_PATH * 4];
 	FolderViewScanner* m_pScanner;
 	std::map<std::wstring, ListItem*> m_nameMap;
-	PFNLVCOMPARE m_pfnSort;  // current sort order (compareIndex = File Explorer's order)
+	int m_sort;               // current sort order (SORT_* in Settings.h)
+	UINT m_scanGeneration;    // number of the current scanner (see WM_ENUMDONE)
+	bool m_bReloading;        // reloading the same folder after a change (see Reload)
+	set<wstring> m_staleItems; // while reloading: items not found again yet
+	ULONG m_changeNotifyId;   // registration for change notifications of the folder (0 if none)
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_pfnSort(compareIndex)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_changeNotifyId(0)
 {
 	DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -602,6 +639,10 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 	column.fmt = LVCFMT_RIGHT;
 	column.pszText = _T("Size");
 	ListView_InsertColumn(m_lv, 1, &column);
+	// Empty column used as right padding for the Size column (see SIZE_COLUMN_RIGHT_PADDING_DIP).
+	column.fmt = LVCFMT_LEFT;
+	column.pszText = _T("");
+	ListView_InsertColumn(m_lv, 2, &column);
 
 	SHFILEINFO shfi;
 	HIMAGELIST himl = (HIMAGELIST)SHGetFileInfo(_T(""), FILE_ATTRIBUTE_DIRECTORY, &shfi, sizeof(shfi), SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
@@ -609,15 +650,19 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 		return -1;
 	ListView_SetImageList(m_lv, himl, LVSIL_SMALL);
 
+	ApplySort();
 	AdjustSizeForList();
 
-	m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd);
+	StartScanner();
+	WatchFolderChanges();
 
 	return 0;
 }
 
 LRESULT FSWindow::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
+	StopWatchingFolderChanges();
+	KillTimer(RELOAD_TIMER_ID);
 	if (m_lv)
 		RemoveWindowSubclass(m_lv, ListViewSubclassProc, 0);
 	if (m_hFont)
@@ -697,6 +742,31 @@ LRESULT FSWindow::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled
 	return 0;
 }
 
+// Sorts the list in the current order and shows it in the column headers: the name header reads
+// "Name (mixed)" in that order, and an arrow marks the sorted column.
+void FSWindow::ApplySort()
+{
+	ListView_SortItems(m_lv, GetCompareFunction(m_sort), 0);
+
+	LVCOLUMN column;
+	column.mask = LVCF_TEXT;
+	column.pszText = m_sort == SORT_NAME_MIXED ? _T("Name (mixed)") : _T("Name");
+	ListView_SetColumn(m_lv, 0, &column);
+
+	HWND hwndHeader = ListView_GetHeader(m_lv);
+	for (int i = 0; i < Header_GetItemCount(hwndHeader); i++)
+	{
+		HDITEM hdi = { HDI_FORMAT };
+		Header_GetItem(hwndHeader, i, &hdi);
+		hdi.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+		if (i == 0 && m_sort != SORT_SIZE)
+			hdi.fmt |= HDF_SORTUP;
+		else if (i == 1 && m_sort == SORT_SIZE)
+			hdi.fmt |= HDF_SORTDOWN;
+		Header_SetItem(hwndHeader, i, &hdi);
+	}
+}
+
 int FSWindow::GetListMarginX()
 {
 	return MulDiv(LIST_MARGIN_X_DIP, GetDpiForWindow(m_hWnd), 96);
@@ -738,6 +808,35 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 	{
 		for (size_t i=0; i<items.size(); i++)
 		{
+			TCHAR buffer[50];
+			FormatFolderInfoBuffer(items[i]->GetSize(), buffer, 50);
+
+			// When reloading the same folder, an item that is already in the list is updated in
+			// place, so the scroll position and the selection are kept.
+			map<wstring, ListItem*>::iterator existing = m_nameMap.find(items[i]->GetFileName());
+			if (m_bReloading && existing != m_nameMap.end())
+			{
+				LVFINDINFO lvfi;
+				lvfi.flags = LVFI_PARAM;
+				lvfi.lParam = (LPARAM)existing->second;
+				int iFind = ListView_FindItem(m_lv, -1, &lvfi);
+				if (iFind >= 0)
+				{
+					LVITEM item = {0};
+					item.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
+					item.iItem = iFind;
+					item.pszText = (LPTSTR)items[i]->GetName();
+					item.iImage = items[i]->GetIcon();
+					item.lParam = (LPARAM)items[i];
+					ListView_SetItem(m_lv, &item);
+					ListView_SetItemText(m_lv, iFind, 1, buffer);
+					delete existing->second;
+					existing->second = items[i];
+					m_staleItems.erase(items[i]->GetFileName());
+					continue;
+				}
+			}
+
 			LVITEM item = {0};
 			item.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
 			item.iItem = INT_MAX;
@@ -746,19 +845,135 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 			item.iImage = items[i]->GetIcon();
 			item.lParam = (LPARAM)items[i];
 			item.iItem = ListView_InsertItem(m_lv, &item);
-			item.mask = LVIF_TEXT;
-			item.iSubItem = 1;
-			TCHAR buffer[50];
-			FormatFolderInfoBuffer(items[i]->GetSize(), buffer, 50);
-			item.pszText = buffer;
-			ListView_SetItem(m_lv, &item);
+			ListView_SetItemText(m_lv, item.iItem, 1, buffer);
 
-			m_nameMap.insert(pair<wstring, ListItem*>(items[i]->GetFileName(), items[i]));
+			m_nameMap[items[i]->GetFileName()] = items[i];
 		}
-		if (m_pfnSort != compareIndex)
-			ListView_SortItems(m_lv, m_pfnSort, 0);
+		ListView_SortItems(m_lv, GetCompareFunction(m_sort), 0);
 		AdjustSizeForList();
 	}
+	return 0;
+}
+
+// The scanner has listed the whole folder. After a reload, remove the items that are gone.
+LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	if ((UINT)wParam != m_scanGeneration)
+		return 0;  // from a scanner that was replaced
+
+	// Take the last items first, in case their WM_NEWITEMS hasn't been handled yet.
+	BOOL b;
+	OnNewItems(WM_NEWITEMS, 0, 0, b);
+
+	if (m_bReloading)
+	{
+		for (set<wstring>::iterator itr = m_staleItems.begin(); itr != m_staleItems.end(); itr++)
+		{
+			map<wstring, ListItem*>::iterator gone = m_nameMap.find(*itr);
+			if (gone == m_nameMap.end())
+				continue;
+			LVFINDINFO lvfi;
+			lvfi.flags = LVFI_PARAM;
+			lvfi.lParam = (LPARAM)gone->second;
+			int iFind = ListView_FindItem(m_lv, -1, &lvfi);
+			if (iFind >= 0)
+				ListView_DeleteItem(m_lv, iFind);
+			delete gone->second;
+			m_nameMap.erase(gone);
+		}
+		m_staleItems.clear();
+		m_bReloading = false;
+		AdjustSizeForList();
+	}
+	return 0;
+}
+
+void FSWindow::StartScanner()
+{
+	m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd, ++m_scanGeneration);
+}
+
+// Reads the folder again after a change (file created, deleted, renamed, moved to the Recycle
+// Bin...). Items are matched by file name: existing ones are updated in place, new ones are
+// added, and the ones not found again are removed when the scan is done (OnEnumDone).
+void FSWindow::Reload()
+{
+	if (m_pScanner)
+		m_pScanner->Quit();
+	m_bReloading = true;
+	m_staleItems.clear();
+	for (map<wstring, ListItem*>::iterator itr = m_nameMap.begin(); itr != m_nameMap.end(); itr++)
+		m_staleItems.insert(itr->first);
+	StartScanner();
+}
+
+// Returns the folder currently shown in a File Explorer tab (to free with CoTaskMemFree).
+static LPITEMIDLIST GetBrowserFolder(IWebBrowser2* pWebBrowser)
+{
+	LPITEMIDLIST pidl = NULL;
+	CComQIPtr<IServiceProvider> psp(pWebBrowser);
+	CComPtr<IShellBrowser> psb;
+	CComPtr<IShellView> psv;
+	CComPtr<IFolderView> pfv;
+	CComPtr<IPersistFolder2> ppf2;
+	if (psp && SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb))
+		&& SUCCEEDED(psb->QueryActiveShellView(&psv))
+		&& SUCCEEDED(psv->QueryInterface(IID_IFolderView, (void**)&pfv))
+		&& SUCCEEDED(pfv->GetFolder(IID_IPersistFolder2, (void**)&ppf2)))
+	{
+		ppf2->GetCurFolder(&pidl);
+	}
+	return pidl;
+}
+
+// Asks Windows to report changes in the folder shown (only that folder, not its subfolders).
+// Sizes of subfolders are kept up to date by the service; this is for items added, removed or
+// renamed in the folder itself.
+void FSWindow::WatchFolderChanges()
+{
+	StopWatchingFolderChanges();
+	LPITEMIDLIST pidl = GetBrowserFolder(m_pWebBrowser);
+	if (!pidl)
+		return;
+	SHChangeNotifyEntry entry = { pidl, FALSE };
+	m_changeNotifyId = SHChangeNotifyRegister(m_hWnd, SHCNRF_ShellLevel | SHCNRF_InterruptLevel | SHCNRF_NewDelivery,
+		SHCNE_CREATE | SHCNE_DELETE | SHCNE_MKDIR | SHCNE_RMDIR | SHCNE_RENAMEITEM | SHCNE_RENAMEFOLDER |
+		SHCNE_UPDATEITEM | SHCNE_UPDATEDIR,
+		WM_SHELLCHANGE, 1, &entry);
+	CoTaskMemFree(pidl);
+}
+
+void FSWindow::StopWatchingFolderChanges()
+{
+	if (m_changeNotifyId)
+	{
+		SHChangeNotifyDeregister(m_changeNotifyId);
+		m_changeNotifyId = 0;
+	}
+}
+
+LRESULT FSWindow::OnShellChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	// With SHCNRF_NewDelivery, the notification must be locked and unlocked. Its details aren't
+	// needed: the folder is read again, after a short delay to group bursts of changes.
+	PIDLIST_ABSOLUTE* ppidl;
+	LONG lEvent;
+	HANDLE hLock = SHChangeNotification_Lock((HANDLE)wParam, (DWORD)lParam, &ppidl, &lEvent);
+	if (hLock)
+		SHChangeNotification_Unlock(hLock);
+	SetTimer(RELOAD_TIMER_ID, RELOAD_DELAY_MS);
+	return 0;
+}
+
+LRESULT FSWindow::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	if (wParam != RELOAD_TIMER_ID)
+	{
+		bHandled = FALSE;
+		return 0;
+	}
+	KillTimer(RELOAD_TIMER_ID);
+	Reload();
 	return 0;
 }
 
@@ -791,8 +1006,8 @@ LRESULT FSWindow::OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& 
 			}
 			delete items[i];
 		}
-		if (m_pfnSort == compareSize)
-			ListView_SortItems(m_lv, m_pfnSort, 0);
+		if (m_sort == SORT_SIZE)
+			ListView_SortItems(m_lv, GetCompareFunction(m_sort), 0);
 		AdjustSizeForList();
 	}
 	return 0;
@@ -804,33 +1019,56 @@ LRESULT FSWindow::OnClose(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandle
 	return 0;
 }
 
-// Sort orders of the list. The window opens with the order of File Explorer; clicking a column
-// header switches to that column's order, which is then kept when the folder content changes.
-//   compareIndex: the order File Explorer showed (folders first)
-//   compareName:  alphabetical, folders and files mixed, so "Games" and "Games.zip" are next to
-//                 each other. Uses the same comparison as File Explorer (StrCmpLogicalW: case
-//                 insensitive, numbers in numeric order, "Disc 2" before "Disc 10").
-//   compareSize:  largest first
-int CALLBACK compareIndex(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
+// Sort orders of the list (see SORT_* in Settings.h). The window opens with the default sort
+// chosen in the control panel. Clicking the name header switches between "Name" and
+// "Name (mixed)"; clicking the size header sorts by size. Names sort A to Z and sizes largest
+// first; the other directions aren't offered. Names are compared as File Explorer does
+// (StrCmpLogicalW: case-insensitive, numbers in numeric order, "Disc 2" before "Disc 10").
+static int CompareNames(ListItem* p1, ListItem* p2)
 {
-	return ((ListItem*)lParam1)->GetIndex() - ((ListItem*)lParam2)->GetIndex();
+	return StrCmpLogicalW(p1->GetName(), p2->GetName());
 }
 
-int CALLBACK compareName(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
+// "Name": folders first, then files, as File Explorer does.
+int CALLBACK compareNameFoldersFirst(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 {
 	ListItem* p1 = (ListItem*)lParam1;
 	ListItem* p2 = (ListItem*)lParam2;
-	int result = StrCmpLogicalW(p1->GetName(), p2->GetName());
+	if (p1->IsFolder() != p2->IsFolder())
+		return p1->IsFolder() ? -1 : 1;
+	return CompareNames(p1, p2);
+}
+
+// "Name (mixed)": folders and files mixed, so "Games" and "Games.zip" are next to each other.
+// With the same name, the folder comes first.
+int CALLBACK compareNameMixed(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
+{
+	ListItem* p1 = (ListItem*)lParam1;
+	ListItem* p2 = (ListItem*)lParam2;
+	int result = CompareNames(p1, p2);
 	if (result == 0 && p1->IsFolder() != p2->IsFolder())
-		result = p1->IsFolder() ? -1 : 1;  // same name: the folder goes first
+		result = p1->IsFolder() ? -1 : 1;
 	return result;
 }
 
+// "Size": largest first, then by name.
 int CALLBACK compareSize(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 {
 	ULONGLONG size1 = ((ListItem*)lParam1)->GetSize().nLogicalSize;
 	ULONGLONG size2 = ((ListItem*)lParam2)->GetSize().nLogicalSize;
-	return size1 == size2 ? 0 : size1 > size2 ? -1 : 1;
+	if (size1 != size2)
+		return size1 > size2 ? -1 : 1;
+	return compareNameMixed(lParam1, lParam2, lParamSort);
+}
+
+static PFNLVCOMPARE GetCompareFunction(int sort)
+{
+	switch (sort)
+	{
+	case SORT_NAME_MIXED: return compareNameMixed;
+	case SORT_SIZE:       return compareSize;
+	default:              return compareNameFoldersFirst;
+	}
 }
 
 LRESULT FSWindow::OnItemActivate(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
@@ -862,8 +1100,27 @@ LRESULT FSWindow::OnItemActivate(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
 LRESULT FSWindow::OnColumnClick(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
 {
 	LPNMLISTVIEW pnmlv = (LPNMLISTVIEW)pnmh;
-	m_pfnSort = pnmlv->iSubItem == 0 ? compareName : compareSize;
-	ListView_SortItems(m_lv, m_pfnSort, 0);
+	if (pnmlv->iSubItem == 0)
+	{
+		// The name header switches between the two name orders. Coming from the size order,
+		// it goes back to the default name order.
+		if (m_sort == SORT_NAME)
+			m_sort = SORT_NAME_MIXED;
+		else if (m_sort == SORT_NAME_MIXED)
+			m_sort = SORT_NAME;
+		else
+			m_sort = LoadDefaultSort() == SORT_NAME_MIXED ? SORT_NAME_MIXED : SORT_NAME;
+	}
+	else if (pnmlv->iSubItem == 1)
+	{
+		m_sort = SORT_SIZE;
+	}
+	else
+	{
+		return 0;  // the empty padding column
+	}
+	ApplySort();
+	AdjustSizeForList();
 	return 0;
 }
 
@@ -956,6 +1213,7 @@ void FSWindow::AdjustSizeForList()
 	ListView_SetColumnWidth(m_lv, 0, LVSCW_AUTOSIZE);
 	ListView_SetColumnWidth(m_lv, 1, LVSCW_AUTOSIZE);
 	ListView_SetColumnWidth(m_lv, 1, ListView_GetColumnWidth(m_lv, 1) + MulDiv(SIZE_COLUMN_EXTRA_DIP, dpi, 96));
+	ListView_SetColumnWidth(m_lv, 2, MulDiv(SIZE_COLUMN_RIGHT_PADDING_DIP, dpi, 96));
 
 	// get the original window position and coordinates of the monitor it's on
 	RECT rc;
@@ -1047,13 +1305,17 @@ void FSWindow::OnNavigateComplete(IDispatch* pDisp, VARIANT* URL)
 	else
 	{
 		m_pScanner->Quit();
+		KillTimer(RELOAD_TIMER_ID);
+		m_bReloading = false;
+		m_staleItems.clear();
 
 		// the notification from the control will clean up the old items
 		ListView_DeleteAllItems(m_lv);
 
 		AdjustSizeForList();
 
-		m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd);
+		StartScanner();
+		WatchFolderChanges();
 	}
 }
 

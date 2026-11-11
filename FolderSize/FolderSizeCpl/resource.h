@@ -36,6 +36,9 @@
 #define IDC_DISPLAY_CD                  1017
 #define IDC_DISPLAY_REMOVABLE           1018
 #define IDC_CREDITS                     1020
+#define IDC_SORT_NAME                   1023
+#define IDC_SORT_NAME_MIXED             1024
+#define IDC_SORT_SIZE                   1025
 #define IDC_FOLDERSIZEICON              1021
 #define IDC_TRANSLATORS                 1022
 

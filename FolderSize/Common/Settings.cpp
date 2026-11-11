@@ -22,6 +22,30 @@ void SaveDWord(HKEY hKey, LPCTSTR lpValueName, DWORD dw)
 	RegSetValueEx(hKey, lpValueName, 0, REG_DWORD, (CONST BYTE*)&dw, sizeof(DWORD));
 }
 
+int LoadDefaultSort()
+{
+	int sort = SORT_NAME;
+	HKEY hKey;
+	if (RegOpenKeyEx(HKEY_CURRENT_USER, USER_SETTINGS_KEY, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+	{
+		DWORD dw;
+		if (LoadDWord(hKey, TEXT("DefaultSort"), dw) && dw <= SORT_SIZE)
+			sort = (int)dw;
+		RegCloseKey(hKey);
+	}
+	return sort;
+}
+
+void SaveDefaultSort(int sort)
+{
+	HKEY hKey;
+	if (RegCreateKeyEx(HKEY_CURRENT_USER, USER_SETTINGS_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+	{
+		SaveDWord(hKey, TEXT("DefaultSort"), (DWORD)sort);
+		RegCloseKey(hKey);
+	}
+}
+
 int LoadScanDriveTypes()
 {
 	// they're all on by default, but a 0 in the registry will turn off each type
