@@ -2,6 +2,7 @@
 #include "Service.h"
 #include "Resource.h"
 #include "..\FolderSizeService\FolderSizeSvc.h"
+#include "..\Common\Settings.h"
 
 
 struct MODIFY_SERVICE_PARAMS
@@ -139,4 +140,17 @@ DWORD GetServiceStatus()
 	}
 
 	return dwStatus;
+}
+
+DWORD SaveDriveTypesAndTellService(int DriveTypes)
+{
+	DWORD dwError = SaveScanDriveTypes(DriveTypes);
+	if (!dwError)
+	{
+		dwError = ModifyService(MS_PARAMCHANGE);
+		// A stopped service reads the setting when it starts.
+		if (dwError == ERROR_SERVICE_NOT_ACTIVE)
+			dwError = 0;
+	}
+	return dwError;
 }

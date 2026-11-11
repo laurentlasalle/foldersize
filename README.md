@@ -30,6 +30,13 @@ for Windows 2.6 is installed, the installer replaces it.
 The settings are available from the menu of the notification area icon
 (Settings...) and from Control Panel.
 
+Controlling the service (Start, Stop, Pause, Resume on the Service tab) and
+changing the drive types to scan need administrator rights. The settings
+panel runs with the rights of the user, so these actions show the shield
+and Windows asks for approval (UAC) when they are used. The approval prompt
+names Windows host process (Rundll32), which runs the action from
+`FolderSize.cpl`. The other settings don't need administrator rights.
+
 ### Portable use
 
 The programs can also run without the installer: copy `FolderSize.exe`,

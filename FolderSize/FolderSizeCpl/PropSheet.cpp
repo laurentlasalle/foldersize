@@ -72,6 +72,67 @@ static const DialogText g_CreditsTexts[] =
 	{ IDOK, STR_COMMON_OK },
 };
 
+// Shows the shield on a button, for actions that need administrator rights.
+// (BCM_SETSHIELD is only declared for _WIN32_WINNT 0x0600 and later, and the panel uses 0x0500.)
+#ifndef BCM_SETSHIELD
+#define BCM_SETSHIELD 0x160C
+#endif
+
+// Whether the panel runs with administrator rights (elevated), so it can control the service and
+// change the drive types to scan itself, without asking Windows for approval.
+static bool IsElevated()
+{
+	bool bElevated = false;
+	HANDLE hToken;
+	if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+	{
+		TOKEN_ELEVATION elevation;
+		DWORD cb = sizeof(elevation);
+		if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &cb))
+			bElevated = elevation.TokenIsElevated != 0;
+		CloseHandle(hToken);
+	}
+	return bElevated;
+}
+
+// Runs a command of the panel (see ElevatedCommandW in FolderSizeCpl.cpp) with administrator
+// rights: Windows asks the user for approval (UAC), then rundll32.exe loads the panel in a new
+// process that runs the command. Waits for it to finish. Returns the error of the command, 0 if it
+// succeeded, or ERROR_CANCELLED if the user declined.
+static DWORD RunElevated(HWND hwnd, LPCWSTR pszCommand)
+{
+	WCHAR szPanel[MAX_PATH];
+	if (!GetModuleFileNameW(g_hInstance, szPanel, MAX_PATH))
+		return GetLastError();
+	WCHAR szRundll[MAX_PATH];
+	if (!GetSystemDirectoryW(szRundll, MAX_PATH) || !PathAppendW(szRundll, L"rundll32.exe"))
+		return ERROR_PATH_NOT_FOUND;
+	WCHAR szParameters[MAX_PATH + 64];
+	wsprintfW(szParameters, L"\"%s\",ElevatedCommand %s", szPanel, pszCommand);
+
+	SHELLEXECUTEINFOW sei = {0};
+	sei.cbSize = sizeof(sei);
+	sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+	sei.hwnd = hwnd;
+	sei.lpVerb = L"runas";
+	sei.lpFile = szRundll;
+	sei.lpParameters = szParameters;
+	sei.nShow = SW_HIDE;
+	if (!ShellExecuteExW(&sei))
+		return GetLastError();
+
+	DWORD dwError = ERROR_GEN_FAILURE;
+	if (sei.hProcess)
+	{
+		HCURSOR hPrevCursor = SetCursor(LoadCursor(NULL, IDC_WAIT));
+		WaitForSingleObject(sei.hProcess, INFINITE);
+		SetCursor(hPrevCursor);
+		GetExitCodeProcess(sei.hProcess, &dwError);
+		CloseHandle(sei.hProcess);
+	}
+	return dwError;
+}
+
 void DisplayError(HWND hwnd, DWORD dwError)
 {
 	LPTSTR pszMessage;
@@ -179,15 +240,25 @@ INT_PTR CALLBACK GeneralProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 					DriveTypes |= SCANDRIVETYPE_NETWORK;
 
 				// Saving drive types requires writing to an administrator's registry location and controlling a service.
-				// So only do this if the setting has actually changed.
+				// So only do this if the setting has actually changed. Without administrator rights,
+				// Windows asks for approval first.
 				if (LoadScanDriveTypes() != DriveTypes)
 				{
-					DWORD dwError = SaveScanDriveTypes(DriveTypes);
-					if (!dwError)
-						dwError = ModifyService(MS_PARAMCHANGE);
+					DWORD dwError;
+					if (IsElevated())
+					{
+						dwError = SaveDriveTypesAndTellService(DriveTypes);
+					}
+					else
+					{
+						WCHAR szCommand[32];
+						wsprintfW(szCommand, L"drivetypes %d", DriveTypes);
+						dwError = RunElevated(hwndDlg, szCommand);
+					}
 					if (dwError)
 					{
-						DisplayError(hwndDlg, dwError);
+						if (dwError != ERROR_CANCELLED)
+							DisplayError(hwndDlg, dwError);
 						SetWindowLongPtr(hwndDlg, DWLP_MSGRESULT, PSNRET_INVALID);
 					}
 				}
@@ -232,10 +303,14 @@ void UpdateServiceStatus(HWND hwndDlg)
 	EnableWindow(GetDlgItem(hwndDlg, IDC_SERVICE_RESUME), g_ServerStateLookup[dwStatus].bEnableContinue);
 }
 
+// Commands of ElevatedCommandW for each MODIFY_SERVICE value (MS_PARAMCHANGE is never run alone).
+static LPCWSTR g_ServiceCommands[MS_MAX] = { L"start", L"stop", L"pause", L"continue", L"" };
+
 void ModifyServiceAndShowResult(HWND hwndDlg, MODIFY_SERVICE ms)
 {
-	DWORD dwError = ModifyService(ms);
-	if (dwError)
+	// Without administrator rights, Windows asks for approval first (the buttons show the shield).
+	DWORD dwError = IsElevated() ? ModifyService(ms) : RunElevated(hwndDlg, g_ServiceCommands[ms]);
+	if (dwError && dwError != ERROR_CANCELLED)
 		DisplayError(hwndDlg, dwError);
 	UpdateServiceStatus(hwndDlg);
 }
@@ -277,6 +352,14 @@ INT_PTR CALLBACK ServiceProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			HICON hIcon = LoadIcon(NULL, IDI_INFORMATION);
 			SendMessage(GetDlgItem(hwndDlg, IDC_SERVICE_INFOICON), STM_SETICON, (WPARAM)hIcon, 0);
 			TranslateDialog(hwndDlg, g_ServiceTexts, countof_texts(g_ServiceTexts));
+
+			// the buttons need administrator rights: show the shield when Windows will ask for approval
+			if (!IsElevated())
+			{
+				static const int buttons[] = { IDC_SERVICE_START, IDC_SERVICE_STOP, IDC_SERVICE_PAUSE, IDC_SERVICE_RESUME };
+				for (int i = 0; i < countof(buttons); i++)
+					SendDlgItemMessage(hwndDlg, buttons[i], BCM_SETSHIELD, 0, TRUE);
+			}
 			return TRUE;
 		}
 

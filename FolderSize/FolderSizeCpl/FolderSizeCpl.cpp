@@ -1,6 +1,7 @@
 #include "StdAfx.h"
 #include "PropSheet.h"
 #include "Resource.h"
+#include "Service.h"
 #include "../Common/LangStrings.h"
 
 HINSTANCE g_hInstance = NULL;
@@ -13,6 +14,28 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD fdwReason, LPVOID lpReserved)
 		DisableThreadLibraryCalls(hInstance);
 	}
     return TRUE;
+}
+
+// Entry point for rundll32.exe, run by RunElevated (PropSheet.cpp) with administrator rights:
+//   rundll32.exe "<path of FolderSize.cpl>",ElevatedCommand <command>
+// where <command> is one of:
+//   start, stop, pause, continue   controls the service
+//   drivetypes <n>                 saves the drive types to scan and tells the service
+// The exit code of the process is the error of the command, or 0 if it succeeded.
+extern "C" void CALLBACK ElevatedCommandW(HWND hwnd, HINSTANCE hinst, LPWSTR pszCmdLine, int nCmdShow)
+{
+	DWORD dwError = ERROR_INVALID_PARAMETER;
+	if (lstrcmpiW(pszCmdLine, L"start") == 0)
+		dwError = ModifyService(MS_START);
+	else if (lstrcmpiW(pszCmdLine, L"stop") == 0)
+		dwError = ModifyService(MS_STOP);
+	else if (lstrcmpiW(pszCmdLine, L"pause") == 0)
+		dwError = ModifyService(MS_PAUSE);
+	else if (lstrcmpiW(pszCmdLine, L"continue") == 0)
+		dwError = ModifyService(MS_CONTINUE);
+	else if (StrCmpNIW(pszCmdLine, L"drivetypes ", 11) == 0)
+		dwError = SaveDriveTypesAndTellService(StrToIntW(pszCmdLine + 11));
+	ExitProcess(dwError);
 }
 
 LONG APIENTRY CPlApplet(HWND hwndCPl, UINT uMsg, LPARAM lParam1, LPARAM lParam2)

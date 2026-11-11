@@ -2,3 +2,4 @@ LIBRARY	FolderSize.cpl
 
 EXPORTS
 	CPlApplet
+	ElevatedCommandW
