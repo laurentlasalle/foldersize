@@ -1436,11 +1436,9 @@ class ShellWindowManager :
 	public IDispEventSimpleImpl<1, ShellWindowManager, &DIID_DShellWindowsEvents>
 {
 public:
-	// Known class name, so the control panel can find this window (see SETTINGS_CHANGED_MESSAGE).
-	DECLARE_WND_CLASS(MAIN_WINDOW_CLASS)
-
 	ShellWindowManager();
 
+	// Known class name, also used by the control panel to find this window (MAIN_WINDOW_CLASS)
 	DECLARE_WND_CLASS(SHELL_WINDOW_CLASS_NAME)
 
 private:

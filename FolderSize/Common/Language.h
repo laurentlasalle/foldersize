@@ -37,4 +37,4 @@ std::wstring Tr(UINT id);
 // size windows. A broadcast can't be used: it doesn't reach owned windows, and the size windows
 // are owned by File Explorer windows.
 #define SETTINGS_CHANGED_MESSAGE L"FolderSizeRedux.SettingsChanged"
-#define MAIN_WINDOW_CLASS L"FolderSizeRedux.Main"
+#define MAIN_WINDOW_CLASS L"FolderSizeShellWindow"  // SHELL_WINDOW_CLASS_NAME in Window/main.cpp
