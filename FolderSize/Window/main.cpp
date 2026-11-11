@@ -1369,11 +1369,15 @@ END_SINK_MAP()
 	void __stdcall OnWindowRegistered(long lCookie);
 
 	void AddFSWindow(IWebBrowser2* pwb);
+	void StartPortableScanner();
 	void WatchTabs(HWND hwndExplorer);
 	static void CALLBACK TabEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD idEventThread, DWORD dwmsEventTime);
 
 	HICON m_icon;
 	HICON m_gray;
+	// Portable mode: job holding the scanner process started by this program (see
+	// StartPortableScanner). Closing it ends the scanner. NULL when the service is installed.
+	HANDLE m_hScannerJob;
 	CComPtr<IShellWindows> m_pShellWindows;
 	set<FSWindow*> m_FSWindows;
 	// One event hook per process that hosts File Explorer windows, to see tabs being switched.
@@ -1383,7 +1387,7 @@ END_SINK_MAP()
 
 _ATL_FUNC_INFO ShellWindowManager::ShellWindowsEventInfo = { CC_STDCALL, VT_EMPTY, 1, {VT_I4} };
 
-ShellWindowManager::ShellWindowManager() : m_icon(NULL), m_gray(NULL)
+ShellWindowManager::ShellWindowManager() : m_icon(NULL), m_gray(NULL), m_hScannerJob(NULL)
 {
 	g_hwndMain = Create(HWND_MESSAGE);
 }
@@ -1442,6 +1446,7 @@ LRESULT ShellWindowManager::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BO
 	nid.uVersion = NOTIFYICON_VERSION_4;
 	bRes = Shell_NotifyIcon(NIM_SETVERSION, &nid);
 
+	StartPortableScanner();
 	Activate();
 
 	return 0;
@@ -1449,6 +1454,13 @@ LRESULT ShellWindowManager::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BO
 
 LRESULT ShellWindowManager::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
+	// Portable mode: closing the job ends the scanner process.
+	if (m_hScannerJob)
+	{
+		CloseHandle(m_hScannerJob);
+		m_hScannerJob = NULL;
+	}
+
 	if (m_pShellWindows)
 		Deactivate();
 
@@ -1572,6 +1584,71 @@ LRESULT ShellWindowManager::OnKillWindow(UINT uMsg, WPARAM wParam, LPARAM lParam
 	m_FSWindows.erase(pWindow);
 	delete pWindow;
 	return 0;
+}
+
+// True when the Folder Size service is installed (it may be stopped). If the service manager
+// can't be asked, assume it is installed, so a second scanner is never started by mistake.
+static bool IsServiceInstalled()
+{
+	SC_HANDLE hSCM = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+	if (!hSCM)
+		return true;
+	bool bInstalled = true;
+	SC_HANDLE hService = OpenService(hSCM, _T("FolderSize"), SERVICE_QUERY_STATUS);
+	if (hService)
+		CloseServiceHandle(hService);
+	else if (GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST)
+		bInstalled = false;
+	CloseServiceHandle(hSCM);
+	return bInstalled;
+}
+
+// Portable mode (programs copied without the installer): there is no service to scan folders,
+// so run FolderSizeSvc.exe from this program's folder as an ordinary background process, with
+// its -debug option (no service, no administrator rights needed). It is put in a job that ends
+// it when this program exits, even if this program crashes. In this mode the cache is kept in
+// memory only while this program runs, and all drive types are scanned.
+void ShellWindowManager::StartPortableScanner()
+{
+	if (m_hScannerJob || IsServiceInstalled())
+		return;
+
+	TCHAR szExe[MAX_PATH];
+	DWORD dw = GetModuleFileName(NULL, szExe, MAX_PATH);
+	if (dw == 0 || dw >= MAX_PATH)
+		return;
+	PathRemoveFileSpec(szExe);
+	if (!PathAppend(szExe, _T("FolderSizeSvc.exe")) || !PathFileExists(szExe))
+		return;
+
+	HANDLE hJob = CreateJobObject(NULL, NULL);
+	if (!hJob)
+		return;
+	JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
+	jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+	SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+
+	TCHAR szCmd[MAX_PATH + 16];
+	wsprintf(szCmd, _T("\"%s\" -debug"), szExe);
+	STARTUPINFO si = { sizeof(si) };
+	PROCESS_INFORMATION pi;
+	if (!CreateProcess(szExe, szCmd, NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+	{
+		CloseHandle(hJob);
+		return;
+	}
+	if (AssignProcessToJobObject(hJob, pi.hProcess))
+	{
+		ResumeThread(pi.hThread);
+		m_hScannerJob = hJob;
+	}
+	else
+	{
+		TerminateProcess(pi.hProcess, 0);
+		CloseHandle(hJob);
+	}
+	CloseHandle(pi.hThread);
+	CloseHandle(pi.hProcess);
 }
 
 void ShellWindowManager::AddFSWindow(IWebBrowser2* pwb)

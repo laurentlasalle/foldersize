@@ -30,6 +30,21 @@ for Windows 2.6 is installed, the installer replaces it.
 The settings are available from the menu of the notification area icon
 (Settings...) and from Control Panel.
 
+### Portable use
+
+The programs can also run without the installer: copy `FolderSize.exe`,
+`FolderSizeSvc.exe` and `FolderSize.cpl` to the same folder and run
+`FolderSize.exe`. When the Folder Size service is not installed, it starts
+`FolderSizeSvc.exe` as an ordinary background process (no administrator
+rights needed) and ends it when it exits. In this mode:
+
+- folder sizes are cached only while `FolderSize.exe` runs, so the sizes of
+  large folders take a moment to appear after it starts;
+- all drive types are scanned (choosing drive types requires the installed
+  service);
+- Settings... opens the control panel from its file; it doesn't appear in
+  Control Panel.
+
 ## History
 
 The full CVS history of the original project (2005–2013) was imported from
