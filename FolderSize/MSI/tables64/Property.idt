@@ -46,6 +46,7 @@ ProductName	Folder Size Redux
 ProductVersion	0.1.0
 Progress1	Installing
 Progress2	installs
+REINSTALLMODE	amus
 RemoveIcon	removico
 RepairIcon	repairic
 SecureCustomProperties	OLDFOLDERSIZE64;OLDFOLDERSIZE32;OLDREDUX
