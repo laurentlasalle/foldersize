@@ -160,9 +160,13 @@ INT_PTR CALLBACK GeneralProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 					SaveLanguageSetting(selected > 0 ? GetLanguageInfo(selected - 1).code : L"");
 				}
 
-				// Tell the running Folder Size windows, so they pick up the new language. The
+				// Tell the running FolderSize.exe, so its windows pick up the new language. The
 				// settings panel itself shows the new language the next time it is opened.
-				PostMessage(HWND_BROADCAST, RegisterWindowMessage(SETTINGS_CHANGED_MESSAGE), 0, 0);
+				{
+					HWND hwndMain = FindWindowEx(HWND_MESSAGE, NULL, MAIN_WINDOW_CLASS, NULL);
+					if (hwndMain)
+						PostMessage(hwndMain, RegisterWindowMessage(SETTINGS_CHANGED_MESSAGE), 0, 0);
+				}
 
 				int DriveTypes = 0;
 				if (IsDlgButtonChecked(hwndDlg, IDC_DISPLAY_LOCAL) == BST_CHECKED)

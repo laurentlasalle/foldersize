@@ -552,7 +552,7 @@ static HWND FindTabWindow(HWND hwnd)
 
 static PFNLVCOMPARE GetCompareFunction(int sort);
 
-// Broadcast by the control panel when settings are applied (see SETTINGS_CHANGED_MESSAGE).
+// Sent by the control panel when settings are applied (see SETTINGS_CHANGED_MESSAGE).
 static const UINT WM_SETTINGSCHANGED = RegisterWindowMessage(SETTINGS_CHANGED_MESSAGE);
 
 class FSWindow :
@@ -686,10 +686,6 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 
 	SetWindowSubclass(m_lv, ListViewSubclassProc, 0, (DWORD_PTR)&m_headerState);
 
-	// Let the settings broadcast through even when this program runs with more rights than the
-	// control panel (for example when it was started by the installer): Windows otherwise
-	// blocks messages from a process with fewer rights, and the window would keep its language.
-	ChangeWindowMessageFilterEx(m_hWnd, WM_SETTINGSCHANGED, MSGFLT_ALLOW, NULL);
 	ApplyTheme();
 	UpdateFontForDpi();
 
@@ -1440,6 +1436,9 @@ class ShellWindowManager :
 	public IDispEventSimpleImpl<1, ShellWindowManager, &DIID_DShellWindowsEvents>
 {
 public:
+	// Known class name, so the control panel can find this window (see SETTINGS_CHANGED_MESSAGE).
+	DECLARE_WND_CLASS(MAIN_WINDOW_CLASS)
+
 	ShellWindowManager();
 
 	DECLARE_WND_CLASS(SHELL_WINDOW_CLASS_NAME)
@@ -1454,6 +1453,7 @@ BEGIN_MSG_MAP(FSWindow)
 	MESSAGE_HANDLER(WM_NOTIFYICON, OnAppIconMsg)
 	MESSAGE_HANDLER(WM_KILLWINDOW, OnKillWindow)
 	MESSAGE_HANDLER(WM_UPDATETABS, OnUpdateTabs)
+	MESSAGE_HANDLER(WM_SETTINGSCHANGED, OnSettingsChanged)
 	COMMAND_ID_HANDLER(ID_SHOW, OnShowPopups)
 	COMMAND_ID_HANDLER(ID_START, OnStart)
 	COMMAND_ID_HANDLER(ID_SETTINGS, OnSettings)
@@ -1471,6 +1471,7 @@ END_SINK_MAP()
 	LRESULT OnAppIconMsg(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnKillWindow(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnUpdateTabs(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnSettingsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnShowPopups(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	LRESULT OnStart(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	LRESULT OnSettings(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
@@ -1554,6 +1555,10 @@ LRESULT ShellWindowManager::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BO
 
 	nid.uVersion = NOTIFYICON_VERSION_4;
 	bRes = Shell_NotifyIcon(NIM_SETVERSION, &nid);
+
+	// Accept the settings message even if this program runs with more rights than the control
+	// panel (Windows otherwise blocks messages from processes with fewer rights).
+	ChangeWindowMessageFilterEx(m_hWnd, WM_SETTINGSCHANGED, MSGFLT_ALLOW, NULL);
 
 	StartPortableScanner();
 	Activate();
@@ -1845,6 +1850,18 @@ LRESULT ShellWindowManager::OnUpdateTabs(UINT uMsg, WPARAM wParam, LPARAM lParam
 			if ((pass == 0 && !bIsActive) || (pass == 1 && bIsActive))
 				p->UpdateTabVisibility(hwndActiveTab, bHavePrevious ? &rcPrevious : NULL);
 		}
+	}
+	return 0;
+}
+
+// The control panel applied new settings: pass the message on to each size window.
+LRESULT ShellWindowManager::OnSettingsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	RefreshUiLanguage();
+	for (set<FSWindow*>::iterator itr = m_FSWindows.begin(); itr != m_FSWindows.end(); itr++)
+	{
+		if ((*itr)->m_hWnd)
+			::SendMessage((*itr)->m_hWnd, WM_SETTINGSCHANGED, 0, 0);
 	}
 	return 0;
 }
