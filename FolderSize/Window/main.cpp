@@ -860,6 +860,11 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 			TCHAR buffer[50];
 			FormatFolderInfoBuffer(items[i]->GetSize(), buffer, 50);
 
+			// Shown name followed by a space, which keeps the longest name away from the column
+			// separator (the column is sized to fit its text exactly). Sorting uses the name itself.
+			TCHAR szName[MAX_PATH + 2];
+			wsprintf(szName, _T("%s "), items[i]->GetName());
+
 			// When reloading the same folder, an item that is already in the list is updated in
 			// place, so the scroll position and the selection are kept.
 			map<wstring, ListItem*>::iterator existing = m_nameMap.find(items[i]->GetFileName());
@@ -874,7 +879,7 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 					LVITEM item = {0};
 					item.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
 					item.iItem = iFind;
-					item.pszText = (LPTSTR)items[i]->GetName();
+					item.pszText = szName;
 					item.iImage = items[i]->GetIcon();
 					item.lParam = (LPARAM)items[i];
 					ListView_SetItem(m_lv, &item);
@@ -890,7 +895,7 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 			item.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
 			item.iItem = INT_MAX;
 			item.iSubItem = 0;
-			item.pszText = (LPTSTR)items[i]->GetName();
+			item.pszText = szName;
 			item.iImage = items[i]->GetIcon();
 			item.lParam = (LPARAM)items[i];
 			item.iItem = ListView_InsertItem(m_lv, &item);
