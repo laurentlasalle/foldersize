@@ -53,7 +53,8 @@ public:
 	LPITEMIDLIST GetPidl() { return m_pidl; }
 	FOLDERINFO2& GetSize() { return m_size; }
 	int GetIndex() { return m_index; }
-	int GetIcon() { return m_icon; }
+	int GetIcon() { return m_icon; }  // -1 until read (see FSWindow::OnGetDispInfo)
+	void SetIcon(int icon) { m_icon = icon; }
 	LPCTSTR GetName() { return m_name; }
 	bool IsFolder() { return m_isFolder; }
 	
@@ -185,6 +186,23 @@ static ULONGLONG GetProcessCpuTime()
 	kernel.LowPart = ftKernel.dwLowDateTime; kernel.HighPart = ftKernel.dwHighDateTime;
 	user.LowPart = ftUser.dwLowDateTime; user.HighPart = ftUser.dwHighDateTime;
 	return kernel.QuadPart + user.QuadPart;
+}
+
+// Index in the system image list of the generic small folder or file icon, read once.
+static int GetGenericIcon(bool bFolder)
+{
+	static int icons[2] = { -1, -1 };
+	int& icon = icons[bFolder ? 1 : 0];
+	if (icon < 0)
+	{
+		SHFILEINFO shfi;
+		if (SHGetFileInfo(_T("item"), bFolder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL, &shfi, sizeof(shfi),
+			SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
+			icon = shfi.iIcon;
+		else
+			return 0;
+	}
+	return icon;
 }
 
 #define WM_NEWITEMS      (WM_APP + 1)
@@ -341,13 +359,17 @@ DWORD FolderViewScanner::ThreadProc()
 									LPTSTR pPath;
 									if (SUCCEEDED(StrRetToStr(&strret, pItemID, &pPath)))
 									{
-										SHFILEINFO shfi;
-										shfi.dwAttributes = SFGAO_FILESYSTEM | SFGAO_FOLDER;
+										// Ask the folder File Explorer shows about the item it listed. Asking by
+										// path (SHGetFileInfo) made Windows find the item again from its path,
+										// for each item. The icon isn't read here: only the rows shown need one,
+										// and reading it can be slow (a program's icon is read from its file).
+										// See FSWindow::OnGetDispInfo.
 										t = MeasureNowUs();
-										BOOL bShellInfo = SHGetFileInfo(pPath, 0, &shfi, sizeof(shfi),
-											SHGFI_ATTRIBUTES | SHGFI_ATTR_SPECIFIED | SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0;
+										LPCITEMIDLIST pChild = pItemID;
+										SFGAOF attributes = SFGAO_FILESYSTEM | SFGAO_FOLDER;
+										bool bAttributes = SUCCEEDED(psf2->GetAttributesOf(1, &pChild, &attributes));
 										usShellInfo += MeasureNowUs() - t;
-										if (bShellInfo && shfi.dwAttributes & SFGAO_FILESYSTEM)
+										if (bAttributes && attributes & SFGAO_FILESYSTEM)
 										{
 											FOLDERINFO2 fi;
 											// Decide between folder and file from the file system attribute, not from
@@ -360,7 +382,7 @@ DWORD FolderViewScanner::ThreadProc()
 											usFileInfo += MeasureNowUs() - t;
 											bool bIsDirectory = (dwFileAttributes != INVALID_FILE_ATTRIBUTES)
 												? (dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0
-												: (shfi.dwAttributes & SFGAO_FOLDER) != 0;
+												: (attributes & SFGAO_FOLDER) != 0;
 											ULARGE_INTEGER total, freeSpace;
 											if (bThisPC)
 											{
@@ -392,13 +414,28 @@ DWORD FolderViewScanner::ThreadProc()
 												fi.giff = GIFF_CLEAN;
 											}
 
+											// Folders are shown with the name File Explorer shows, which can be
+											// localized for some system folders.
+											TCHAR szDisplayName[MAX_PATH];
+											szDisplayName[0] = '\0';
+											if (bIsDirectory)
+											{
+												t = MeasureNowUs();
+												STRRET strretName;
+												if (SUCCEEDED(psf2->GetDisplayNameOf(pItemID, SHGDN_NORMAL, &strretName)))
+													StrRetToBuf(&strretName, pItemID, szDisplayName, MAX_PATH);
+												usShellInfo += MeasureNowUs() - t;
+											}
+											if (!szDisplayName[0])
+												lstrcpyn(szDisplayName, PathFindFileName(pPath), MAX_PATH);
+
 											// the ListItem takes ownership of the PIDL
-											ListItem* pItem = new ListItem(PathFindFileName(pPath), pItemID, fi, index++, shfi.iIcon,
+											ListItem* pItem = new ListItem(PathFindFileName(pPath), pItemID, fi, index++, -1 /* icon read when shown */,
 												// Files are shown with their real name, extension included, even when
 												// File Explorer hides extensions: a folder and a .zip file with the same
 												// name can then be told apart. Folders keep the name File Explorer shows
 												// (some system folders show a localized name).
-												bIsDirectory ? shfi.szDisplayName : PathFindFileName(pPath), bIsDirectory);
+												bIsDirectory ? szDisplayName : PathFindFileName(pPath), bIsDirectory);
 											pItemID = NULL;
 
 											EnterCriticalSection(&m_cs);
@@ -413,7 +450,7 @@ DWORD FolderViewScanner::ThreadProc()
 								CoTaskMemFree(pItemID);
 							}
 							pEnum->Release();
-							MeasureLog(L"  scanner: %d items in %d ms, thread CPU %d ms; icons and names %d ms, "
+							MeasureLog(L"  scanner: %d items in %d ms, thread CPU %d ms; attributes and names %d ms, "
 								L"file attributes and sizes %d ms, folder sizes from the service %d ms (%d folders)",
 								(int)nViewItems, (int)((MeasureNowUs() - usStart) / 1000),
 								(int)((GetThreadCpuTime() - cpuStart) / 10000), (int)(usShellInfo / 1000),
@@ -750,6 +787,7 @@ BEGIN_MSG_MAP(FSWindow)
 	NOTIFY_HANDLER(1, LVN_ITEMACTIVATE, OnItemActivate)
 	NOTIFY_HANDLER(1, LVN_COLUMNCLICK, OnColumnClick)
 	NOTIFY_HANDLER(1, LVN_DELETEALLITEMS, OnDeleteAllItems)
+	NOTIFY_HANDLER(1, LVN_GETDISPINFO, OnGetDispInfo)
 END_MSG_MAP()
 
 	LRESULT OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -761,6 +799,7 @@ END_MSG_MAP()
 	LRESULT OnSettingsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnGetDispInfo(int idCtrl, LPNMHDR pnmh, BOOL& bHandled);
 	LRESULT OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnShellChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -788,7 +827,7 @@ END_SINK_MAP()
 
 private:
 	void CreateIfUnminimizedFolderView();
-	void AdjustSizeForList();
+	void AdjustSizeForList(bool bMeasureColumns = true);
 	void UpdateFontForDpi();
 	void ApplyTheme();
 	int GetListMarginX();
@@ -796,6 +835,10 @@ private:
 	void StartScanner();
 	void Reload();
 	void ApplyLayout();
+	bool AddPendingRows();
+	void NoteTextWidths(HDC hdc, LPCTSTR pszName, LPCTSTR pszSize);
+	void RemeasureTextWidths();
+	int GetItemIcon(ListItem* pItem);
 	void ScheduleLayout();
 	void CheckViewComplete();
 	UINT GetViewItemCount();
@@ -823,6 +866,17 @@ private:
 	UINT m_nScannedViewItems; // number of items in File Explorer's view when the scanner listed it
 	bool m_bCheckViewAfterScan; // File Explorer finished listing the folder before the scanner
 	bool m_bLayoutPending;    // LAYOUT_TIMER_ID is set
+	bool m_bSortNeeded;       // rows were added or changed since the list was last sorted
+
+	// Widest name and size texts in the list, in pixels, to size the columns again only when a
+	// new text is wider (see NoteTextWidths). Measured again when the font or the texts change.
+	int m_nameTextMax;
+	int m_sizeTextMax;
+	bool m_bColumnsGrew;      // a new text is wider than the column was sized for
+	bool m_bTextWidthsStale;  // the font or the size format changed: measure all rows again
+
+	// The folder shown in File Explorer, to read the icons of the rows (see GetItemIcon).
+	CComPtr<IShellFolder> m_pFolder;
 	bool m_bOtherLocation;    // File Explorer shows a location the window doesn't show (hidden)
 
 	// TEMPORARY measurement log (see MeasureLog)
@@ -835,6 +889,8 @@ private:
 	ULONGLONG m_measureLayoutUs;  // time spent sorting and fitting, in microseconds
 	int m_measureBatches;         // number of batches of rows added
 	int m_measureLayouts;         // number of times the list was sorted and fitted
+	ULONGLONG m_measureIconUs;    // time spent reading icons, in microseconds
+	int m_measureIcons;           // number of icons read
 
 	// Reloads after changes in the folder (see ScheduleReload)
 	void ScheduleReload();
@@ -848,7 +904,7 @@ private:
 	ULONG m_changeNotifyId;   // registration for change notifications of the folder (0 if none)
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bOtherLocation(false), m_measureReason(L"open"), m_measureStartTick(0), m_measureStartCpu(0), m_measureUiCpuStart(0), m_measureAddUs(0), m_measureLayoutUs(0), m_measureBatches(0), m_measureLayouts(0), m_scanStartTick(0), m_lastScanEndTick(0), m_lastScanMs(0), m_bChangePending(false), m_bReloadTimerSet(false), m_changeNotifyId(0)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bSortNeeded(false), m_nameTextMax(0), m_sizeTextMax(0), m_bColumnsGrew(false), m_bTextWidthsStale(false), m_measureIconUs(0), m_measureIcons(0), m_bOtherLocation(false), m_measureReason(L"open"), m_measureStartTick(0), m_measureStartCpu(0), m_measureUiCpuStart(0), m_measureAddUs(0), m_measureLayoutUs(0), m_measureBatches(0), m_measureLayouts(0), m_scanStartTick(0), m_lastScanEndTick(0), m_lastScanMs(0), m_bChangePending(false), m_bReloadTimerSet(false), m_changeNotifyId(0)
 {
 	BrowserEvents::DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -953,6 +1009,7 @@ LRESULT FSWindow::OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
 		SWP_NOZORDER | SWP_NOACTIVATE);
 	UpdateFontForDpi();
 	// The new font changes the size of the rows and columns, so fit the window to the list again.
+	m_bTextWidthsStale = true;
 	AdjustSizeForList();
 	return 0;
 }
@@ -985,6 +1042,7 @@ LRESULT FSWindow::OnSettingsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOO
 {
 	RefreshUiLanguage();
 	ApplySort();
+	m_bTextWidthsStale = true;  // the sizes may be written differently
 	AdjustSizeForList();
 	return 0;
 }
@@ -1067,15 +1125,30 @@ static void FormatFolderInfoBuffer(FOLDERINFO2& fi, LPTSTR buffer, UINT cch)
 	}
 }
 
+// New items from the scanner: they are added to the list shortly, with the ones that arrive
+// meanwhile (see AddPendingRows), instead of one small batch at a time.
 LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
+	ScheduleLayout();
+	return 0;
+}
+
+// Adds the items the scanner has found since the last call to the list. Returns whether any
+// were added. The caller sorts the list and fits the window afterwards (see ApplyLayout).
+bool FSWindow::AddPendingRows()
+{
 	if (!m_pScanner)
-		return 0;
+		return false;
 	std::vector<ListItem*> items = m_pScanner->GetNewItems();
-	if (!items.empty())
+	if (items.empty())
+		return false;
 	{
 		ULONGLONG usStart = MeasureNowUs();
 		m_measureBatches++;
+
+		// to measure the width of the new texts (see NoteTextWidths)
+		HDC hdc = ::GetDC(m_lv);
+		HGDIOBJ hOldFont = SelectObject(hdc, (HFONT)::SendMessage(m_lv, WM_GETFONT, 0, 0));
 
 		// When reloading the same folder, items already in the list are updated in place, so
 		// the scroll position and the selection are kept. Map each listed item to its row once,
@@ -1104,6 +1177,8 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 			TCHAR szName[MAX_PATH + 2];
 			wsprintf(szName, _T("%s "), items[i]->GetName());
 
+			NoteTextWidths(hdc, szName, buffer);
+
 			map<wstring, ListItem*>::iterator existing = m_nameMap.find(items[i]->GetFileName());
 			if (m_bReloading && existing != m_nameMap.end())
 			{
@@ -1114,7 +1189,7 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 					item.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
 					item.iItem = row->second;
 					item.pszText = szName;
-					item.iImage = items[i]->GetIcon();
+					item.iImage = I_IMAGECALLBACK;  // read when the row is shown
 					item.lParam = (LPARAM)items[i];
 					ListView_SetItem(m_lv, &item);
 					ListView_SetItemText(m_lv, row->second, 1, buffer);
@@ -1132,7 +1207,7 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 			item.iItem = INT_MAX;
 			item.iSubItem = 0;
 			item.pszText = szName;
-			item.iImage = items[i]->GetIcon();
+			item.iImage = I_IMAGECALLBACK;  // read when the row is shown
 			item.lParam = (LPARAM)items[i];
 			item.iItem = ListView_InsertItem(m_lv, &item);
 			ListView_SetItemText(m_lv, item.iItem, 1, buffer);
@@ -1141,11 +1216,114 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 
 			m_nameMap[items[i]->GetFileName()] = items[i];
 		}
-		// sorted and fitted shortly, once for all the batches that arrive meanwhile
-		ScheduleLayout();
+		SelectObject(hdc, hOldFont);
+		::ReleaseDC(m_lv, hdc);
+		m_bSortNeeded = true;
 		m_measureAddUs += MeasureNowUs() - usStart;
 	}
+	return true;
+}
+
+// Notes the width of a row's texts. If one is wider than any so far, the columns must be
+// sized again; otherwise they already fit, and measuring every row again is avoided.
+void FSWindow::NoteTextWidths(HDC hdc, LPCTSTR pszName, LPCTSTR pszSize)
+{
+	SIZE size;
+	if (GetTextExtentPoint32(hdc, pszName, lstrlen(pszName), &size) && size.cx > m_nameTextMax)
+	{
+		m_nameTextMax = size.cx;
+		m_bColumnsGrew = true;
+	}
+	if (GetTextExtentPoint32(hdc, pszSize, lstrlen(pszSize), &size) && size.cx > m_sizeTextMax)
+	{
+		m_sizeTextMax = size.cx;
+		m_bColumnsGrew = true;
+	}
+}
+
+// Measures the texts of all rows again, after the font or the size format changed.
+void FSWindow::RemeasureTextWidths()
+{
+	m_nameTextMax = m_sizeTextMax = 0;
+	m_bTextWidthsStale = false;
+	HDC hdc = ::GetDC(m_lv);
+	HGDIOBJ hOldFont = SelectObject(hdc, (HFONT)::SendMessage(m_lv, WM_GETFONT, 0, 0));
+	int count = ListView_GetItemCount(m_lv);
+	for (int row = 0; row < count; row++)
+	{
+		TCHAR szName[MAX_PATH + 2], szSize[50];
+		ListView_GetItemText(m_lv, row, 0, szName, MAX_PATH + 2);
+		ListView_GetItemText(m_lv, row, 1, szSize, 50);
+		NoteTextWidths(hdc, szName, szSize);
+	}
+	SelectObject(hdc, hOldFont);
+	::ReleaseDC(m_lv, hdc);
+}
+
+// Gives the list the icon of a row when it needs it. The rows are added without icons
+// (I_IMAGECALLBACK): reading an icon can be slow, and a folder can have thousands of items
+// while only a few dozen rows are shown. The icon of a row shown is read once and kept. For a
+// row not shown (the list can ask while it measures its columns), the generic folder or file
+// icon is given, without keeping it, so the real one is read if the row is shown later.
+LRESULT FSWindow::OnGetDispInfo(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
+{
+	NMLVDISPINFO* pdi = (NMLVDISPINFO*)pnmh;
+	if (!(pdi->item.mask & LVIF_IMAGE) || pdi->item.iSubItem != 0)
+		return 0;
+	ListItem* pItem = (ListItem*)pdi->item.lParam;
+	if (!pItem)
+	{
+		// in case the list doesn't give the item's data with the request
+		LVITEM lvi = {0};
+		lvi.mask = LVIF_PARAM;
+		lvi.iItem = pdi->item.iItem;
+		if (!ListView_GetItem(m_lv, &lvi) || !lvi.lParam)
+			return 0;
+		pItem = (ListItem*)lvi.lParam;
+	}
+	int icon = pItem->GetIcon();
+	if (icon < 0)
+	{
+		int top = ListView_GetTopIndex(m_lv);
+		if (pdi->item.iItem >= top && pdi->item.iItem <= top + ListView_GetCountPerPage(m_lv))
+		{
+			icon = GetItemIcon(pItem);
+			pItem->SetIcon(icon);
+		}
+		else
+		{
+			icon = GetGenericIcon(pItem->IsFolder());
+		}
+	}
+	pdi->item.iImage = icon;
 	return 0;
+}
+
+// Reads the icon of a row from the folder File Explorer shows, the same way File Explorer
+// does: custom folder icons (desktop.ini) and the icons of programs are included.
+int FSWindow::GetItemIcon(ListItem* pItem)
+{
+	ULONGLONG usStart = MeasureNowUs();
+	if (!m_pFolder)
+	{
+		CComQIPtr<IServiceProvider> psp(m_pWebBrowser);
+		CComPtr<IShellBrowser> psb;
+		CComPtr<IShellView> psv;
+		CComQIPtr<IFolderView> pfv;
+		if (psp && SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb))
+			&& SUCCEEDED(psb->QueryActiveShellView(&psv)))
+		{
+			pfv = psv;
+			if (pfv)
+				pfv->GetFolder(IID_IShellFolder, (void**)&m_pFolder);
+		}
+	}
+	int icon = m_pFolder ? SHMapPIDLToSystemImageListIndex(m_pFolder, pItem->GetPidl(), NULL) : -1;
+	if (icon < 0)
+		icon = GetGenericIcon(pItem->IsFolder());
+	m_measureIconUs += MeasureNowUs() - usStart;
+	m_measureIcons++;
+	return icon;
 }
 
 // The scanner has listed the whole folder. After a reload, remove the items that are gone.
@@ -1154,9 +1332,8 @@ LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 	if ((UINT)wParam != m_scanGeneration)
 		return 0;  // from a scanner that was replaced
 
-	// Take the last items first, in case their WM_NEWITEMS hasn't been handled yet.
-	BOOL b;
-	OnNewItems(WM_NEWITEMS, 0, 0, b);
+	// Take the last items first.
+	AddPendingRows();
 
 	if (m_bReloading)
 	{
@@ -1176,6 +1353,8 @@ LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 				m_nameMap.erase(pItem->GetFileName());
 				ListView_DeleteItem(m_lv, row);
 				delete pItem;
+				// the widest text may be gone: measure the rows again when fitting
+				m_bTextWidthsStale = true;
 			}
 		}
 		m_staleItems.clear();
@@ -1191,9 +1370,9 @@ LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 			m_measureReason, ListView_GetItemCount(m_lv), (int)lParam,
 			(int)(GetTickCount64() - m_measureStartTick),
 			(int)((GetProcessCpuTime() - m_measureStartCpu) / 10000), szName);
-		MeasureLog(L"  window: rows added in %d batches, %d ms; sorted and fitted %d times, %d ms; window thread CPU %d ms",
+		MeasureLog(L"  window: rows added in %d batches, %d ms; sorted and fitted %d times, %d ms; %d icons read, %d ms; window thread CPU %d ms",
 			m_measureBatches, (int)(m_measureAddUs / 1000), m_measureLayouts, (int)(m_measureLayoutUs / 1000),
-			(int)((GetThreadCpuTime() - m_measureUiCpuStart) / 10000));
+			m_measureIcons, (int)(m_measureIconUs / 1000), (int)((GetThreadCpuTime() - m_measureUiCpuStart) / 10000));
 		m_measureReason = L"open";
 	}
 
@@ -1208,7 +1387,7 @@ LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 	return 0;
 }
 
-// Sorts the list and fits the window to it.
+// Adds the rows waiting, sorts the list if needed and fits the window to it.
 void FSWindow::ApplyLayout()
 {
 	if (m_bLayoutPending)
@@ -1216,9 +1395,21 @@ void FSWindow::ApplyLayout()
 		KillTimer(LAYOUT_TIMER_ID);
 		m_bLayoutPending = false;
 	}
+	// Add the waiting rows and sort with drawing suspended, so the list is drawn once after.
+	::SendMessage(m_lv, WM_SETREDRAW, FALSE, 0);
+	AddPendingRows();
 	ULONGLONG usStart = MeasureNowUs();
-	ListView_SortItems(m_lv, GetCompareFunction(m_sort), 0);
-	AdjustSizeForList();
+	bool bChanged = m_bSortNeeded;
+	if (m_bSortNeeded)
+	{
+		ListView_SortItems(m_lv, GetCompareFunction(m_sort), 0);
+		m_bSortNeeded = false;
+	}
+	::SendMessage(m_lv, WM_SETREDRAW, TRUE, 0);
+	if (bChanged)
+		::InvalidateRect(m_lv, NULL, FALSE);
+	// Size the columns only if a new text is wider than they are.
+	AdjustSizeForList(false);
 	m_measureLayoutUs += MeasureNowUs() - usStart;
 	m_measureLayouts++;
 }
@@ -1273,8 +1464,9 @@ void FSWindow::StartScanner()
 	m_measureStartTick = m_scanStartTick;
 	m_measureStartCpu = GetProcessCpuTime();
 	m_measureUiCpuStart = GetThreadCpuTime();
-	m_measureAddUs = m_measureLayoutUs = 0;
-	m_measureBatches = m_measureLayouts = 0;
+	m_measureAddUs = m_measureLayoutUs = m_measureIconUs = 0;
+	m_measureBatches = m_measureLayouts = m_measureIcons = 0;
+	m_pFolder.Release();  // read again from the view when an icon is needed
 	m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd, ++m_scanGeneration);
 }
 
@@ -1416,6 +1608,8 @@ LRESULT FSWindow::OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& 
 	std::vector<RefreshItem*> items = m_pScanner->GetRefreshItems();
 	if (!items.empty())
 	{
+		HDC hdc = ::GetDC(m_lv);
+		HGDIOBJ hOldFont = SelectObject(hdc, (HFONT)::SendMessage(m_lv, WM_GETFONT, 0, 0));
 		for (size_t i=0; i<items.size(); i++)
 		{
 			map<wstring, ListItem*>::iterator mapFind = m_nameMap.find(items[i]->GetFileName());
@@ -1436,13 +1630,16 @@ LRESULT FSWindow::OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& 
 					FormatFolderInfoBuffer(items[i]->GetSize(), buffer, 50);
 					lvi.pszText = buffer;
 					ListView_SetItem(m_lv, &lvi);
+					NoteTextWidths(hdc, _T(""), buffer);
 				}
 			}
 			delete items[i];
 		}
+		SelectObject(hdc, hOldFont);
+		::ReleaseDC(m_lv, hdc);
 		if (m_sort == SORT_SIZE)
 			ListView_SortItems(m_lv, GetCompareFunction(m_sort), 0);
-		AdjustSizeForList();
+		AdjustSizeForList(false);
 	}
 	return 0;
 }
@@ -1559,6 +1756,7 @@ LRESULT FSWindow::OnDeleteAllItems(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
 	for (map<wstring, ListItem*>::iterator itr = m_nameMap.begin(); itr != m_nameMap.end(); itr++)
 		delete itr->second;
 	m_nameMap.clear();
+	m_nameTextMax = m_sizeTextMax = 0;
 	return TRUE;
 }
 
@@ -1633,17 +1831,30 @@ void FSWindow::CreateIfUnminimizedFolderView()
 	}
 }
 
-void FSWindow::AdjustSizeForList()
+// Fits the columns to their texts and the window to the list. With bMeasureColumns false, the
+// columns are sized again only if a text wider than any before was added (see NoteTextWidths):
+// sizing them measures every row, which is slow with thousands of rows.
+void FSWindow::AdjustSizeForList(bool bMeasureColumns)
 {
 	DWORD dwExLvStyle = ListView_GetExtendedListViewStyle(m_lv);
-	ListView_SetExtendedListViewStyle(m_lv, dwExLvStyle & ~LVS_EX_AUTOSIZECOLUMNS);
 
 	// Use the measurements for the DPI of the monitor the window is on.
 	UINT dpi = GetDpiForWindow(m_hWnd);
 
-	ListView_SetColumnWidth(m_lv, 0, LVSCW_AUTOSIZE);
-	ListView_SetColumnWidth(m_lv, 1, LVSCW_AUTOSIZE);
-	ListView_SetColumnWidth(m_lv, 1, ListView_GetColumnWidth(m_lv, 1) + MulDiv(SIZE_COLUMN_EXTRA_DIP, dpi, 96));
+	if (m_bTextWidthsStale)
+	{
+		RemeasureTextWidths();
+		bMeasureColumns = true;
+	}
+	if (bMeasureColumns || m_bColumnsGrew)
+	{
+		ListView_SetExtendedListViewStyle(m_lv, dwExLvStyle & ~LVS_EX_AUTOSIZECOLUMNS);
+		ListView_SetColumnWidth(m_lv, 0, LVSCW_AUTOSIZE);
+		ListView_SetColumnWidth(m_lv, 1, LVSCW_AUTOSIZE);
+		ListView_SetColumnWidth(m_lv, 1, ListView_GetColumnWidth(m_lv, 1) + MulDiv(SIZE_COLUMN_EXTRA_DIP, dpi, 96));
+		ListView_SetExtendedListViewStyle(m_lv, dwExLvStyle);
+		m_bColumnsGrew = false;
+	}
 
 	// get the original window position and coordinates of the monitor it's on
 	RECT rc;
@@ -1695,9 +1906,11 @@ void FSWindow::AdjustSizeForList()
 		rc.left -= rc.right - mi.rcWork.right;
 		rc.right = mi.rcWork.right;
 	}
-	MoveWindow(rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, TRUE);
-
-	ListView_SetExtendedListViewStyle(m_lv, dwExLvStyle);
+	// Move only if something changed: moving redraws the window.
+	RECT rcCurrent;
+	GetWindowRect(&rcCurrent);
+	if (!EqualRect(&rc, &rcCurrent))
+		MoveWindow(rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, TRUE);
 }
 
 
