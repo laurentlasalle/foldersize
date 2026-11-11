@@ -1,14 +1,14 @@
 # Folder Size for Windows
 
-Folder Size for Windows adds a column to the Windows Explorer details view
-that shows the size of files and folders. A background service scans your
-drives and caches the results.
+Folder Size for Windows shows the size of folders and files as you browse
+them in File Explorer. When you open a folder, a small companion window
+appears next to the Explorer window and lists the size of every folder and
+file in it. A background service scans your drives and caches the results.
 
-This repository is a continuation of the original project by Brio,
-hosted on SourceForge: https://sourceforge.net/projects/foldersize/
-(website: https://foldersize.sourceforge.net). The original project has
-not been updated since version 2.6 (2013). The goal here is to fix bugs
-and keep it working on current versions of Windows.
+This repository is a continuation of the original project by Brio
+(https://sourceforge.net/projects/foldersize/), focused on Windows 10
+and 11. The goal is to fix bugs and keep it working on current versions
+of Windows.
 
 ## History
 
@@ -19,8 +19,9 @@ contributors include Brio, Kirill Müller and eisber.
 
 ## Building
 
-The original code targets Microsoft Visual Studio .NET 2003 (C++).
-See `FolderSize/FolderSize.sln`.
+The project is written in C++. Open `FolderSize/FolderSize.sln` in
+Visual Studio. The solution was last saved with Visual Studio 2005, so it
+still needs to be upgraded to a current version of Visual Studio.
 
 ## License
 
