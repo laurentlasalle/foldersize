@@ -82,10 +82,40 @@ private:
 	TCHAR m_filename[MAX_PATH];
 };
 
+// True for This PC (the list of drives).
+static bool IsThisPC(LPCITEMIDLIST pidl)
+{
+	PIDLIST_ABSOLUTE pidlThisPC = NULL;
+	bool result = false;
+	if (pidl && SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, NULL, &pidlThisPC)))
+	{
+		result = ILIsEqual(pidl, pidlThisPC) != FALSE;
+		CoTaskMemFree(pidlThisPC);
+	}
+	return result;
+}
+
+// What the window shows for a location of File Explorer.
+enum FolderKind
+{
+	FOLDER_FILE_SYSTEM,  // a folder on a drive: its items and their sizes
+	FOLDER_THIS_PC,      // This PC: the drives and their used space (no scanning)
+	FOLDER_OTHER,        // other virtual locations (such as Home or Network): the window is hidden
+};
+
+static FolderKind GetFolderKind(LPCITEMIDLIST pidl)
+{
+	TCHAR szPath[MAX_PATH];
+	if (pidl && SHGetPathFromIDList(pidl, szPath))
+		return FOLDER_FILE_SYSTEM;
+	return IsThisPC(pidl) ? FOLDER_THIS_PC : FOLDER_OTHER;
+}
+
 #define WM_NEWITEMS      (WM_APP + 1)
 #define WM_REFRESHITEMS  (WM_APP + 2)
 // Posted by a scanner when it has listed all the items of the folder. wParam is the scanner's
-// generation number, so the window can ignore messages from scanners it has replaced.
+// generation number, so the window can ignore messages from scanners it has replaced; lParam
+// is the number of items File Explorer's view had (including items not shown in the list).
 #define WM_ENUMDONE      (WM_APP + 4)
 
 
@@ -185,6 +215,8 @@ DWORD FolderViewScanner::ThreadProc()
 
 	TCHAR szFolder[MAX_PATH];
 	szFolder[0] = '\0';
+	bool bThisPC = false;    // the folder is This PC: list the drives with their used space
+	LPARAM nViewItems = 0;   // number of items in File Explorer's view, see WM_ENUMDONE
 
 	IServiceProvider* psp;
 	if (SUCCEEDED(pWebBrowser->QueryInterface(IID_IServiceProvider, (void**)&psp)))
@@ -207,17 +239,22 @@ DWORD FolderViewScanner::ThreadProc()
 							LPITEMIDLIST pFolderID;
 							if (SUCCEEDED(ppf2->GetCurFolder(&pFolderID)))
 							{
-								SHGetPathFromIDList(pFolderID, szFolder);
+								if (!SHGetPathFromIDList(pFolderID, szFolder))
+									bThisPC = IsThisPC(pFolderID);
+								CoTaskMemFree(pFolderID);
 							}
 						}
 
+						// Other virtual locations (such as Home or Network) show nothing: their items could be
+						// anywhere, and asking for their sizes could start scans of whole drives.
 						IEnumIDList* pEnum;
-						if (SUCCEEDED(pfv->Items(SVGIO_FLAG_VIEWORDER, IID_IEnumIDList, (void**)&pEnum)))
+						if ((szFolder[0] || bThisPC) && SUCCEEDED(pfv->Items(SVGIO_FLAG_VIEWORDER, IID_IEnumIDList, (void**)&pEnum)))
 						{
 							int index = 0;
 							LPITEMIDLIST pItemID;
 							while (WaitForSingleObject(m_hQuitEvent, 0) == WAIT_TIMEOUT && pEnum->Next(1, &pItemID, NULL) == S_OK)
 							{
+								nViewItems++;
 								STRRET strret;
 								if (SUCCEEDED(psf2->GetDisplayNameOf(pItemID, SHGDN_FORPARSING, &strret)))
 								{
@@ -240,7 +277,23 @@ DWORD FolderViewScanner::ThreadProc()
 											bool bIsDirectory = (dwFileAttributes != INVALID_FILE_ATTRIBUTES)
 												? (dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0
 												: (shfi.dwAttributes & SFGAO_FOLDER) != 0;
-											if (bIsDirectory)
+											ULARGE_INTEGER total, freeSpace;
+											if (bThisPC)
+											{
+												// This PC: only drives, with the space used on them as Windows
+												// reports it (total minus free). Nothing is scanned. Drives that
+												// can't report it (no disc, disconnected) are left out.
+												if (!PathIsRoot(pPath) || !GetDiskFreeSpaceEx(pPath, NULL, &total, &freeSpace))
+												{
+													CoTaskMemFree(pPath);
+													CoTaskMemFree(pItemID);
+													continue;
+												}
+												bIsDirectory = true;
+												fi.nLogicalSize = total.QuadPart - freeSpace.QuadPart;
+												fi.giff = GIFF_CLEAN;
+											}
+											else if (bIsDirectory)
 											{
 												GetInfoForFolder(pPath, fi);
 											}
@@ -284,7 +337,7 @@ DWORD FolderViewScanner::ThreadProc()
 	}
 
 	if (WaitForSingleObject(m_hQuitEvent, 0) == WAIT_TIMEOUT)
-		PostMessage(m_hWndPost, WM_ENUMDONE, m_generation, 0);
+		PostMessage(m_hWndPost, WM_ENUMDONE, m_generation, nViewItems);
 
 	if (!szFolder[0])
 	{
@@ -451,6 +504,11 @@ static const int SORT_ARROW_MARGIN_DIP = 7;
 // often come in bursts (moving many files); they are handled together after the burst.
 static const UINT RELOAD_DELAY_MS = 300;
 static const UINT_PTR RELOAD_TIMER_ID = 1;
+
+// While items arrive, the list is sorted and the window fitted to it at most this often, in
+// milliseconds, instead of after each batch of items; and once more when the scan is done.
+static const UINT LAYOUT_DELAY_MS = 100;
+static const UINT_PTR LAYOUT_TIMER_ID = 2;
 #define WM_SHELLCHANGE (WM_APP + 5)
 
 // Colors of the list in dark mode, matching the dark File Explorer.
@@ -635,6 +693,11 @@ private:
 	void ApplySort();
 	void StartScanner();
 	void Reload();
+	void ApplyLayout();
+	void ScheduleLayout();
+	void CheckViewComplete();
+	UINT GetViewItemCount();
+	void ShowForLocation(bool bShow);
 	void WatchFolderChanges();
 	void WatchFolderView();
 	void StopWatchingFolderView();
@@ -654,12 +717,17 @@ private:
 	int m_sort;               // current sort order (SORT_* in Settings.h)
 	UINT m_scanGeneration;    // number of the current scanner (see WM_ENUMDONE)
 	bool m_bReloading;        // reloading the same folder after a change (see Reload)
+	bool m_bScanDone;         // the current scanner has listed the whole folder
+	UINT m_nScannedViewItems; // number of items in File Explorer's view when the scanner listed it
+	bool m_bCheckViewAfterScan; // File Explorer finished listing the folder before the scanner
+	bool m_bLayoutPending;    // LAYOUT_TIMER_ID is set
+	bool m_bOtherLocation;    // File Explorer shows a location the window doesn't show (hidden)
 	set<wstring> m_staleItems; // while reloading: items not found again yet
 	CComPtr<IDispatch> m_pFolderView;  // File Explorer's view of the folder, for its EnumDone event
 	ULONG m_changeNotifyId;   // registration for change notifications of the folder (0 if none)
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_changeNotifyId(0)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bOtherLocation(false), m_changeNotifyId(0)
 {
 	BrowserEvents::DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -722,6 +790,8 @@ LRESULT FSWindow::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHand
 {
 	StopWatchingFolderChanges();
 	KillTimer(RELOAD_TIMER_ID);
+	KillTimer(LAYOUT_TIMER_ID);
+	m_bLayoutPending = false;
 	if (m_lv)
 		RemoveWindowSubclass(m_lv, ListViewSubclassProc, 0);
 	if (m_hFont)
@@ -876,9 +946,28 @@ static void FormatFolderInfoBuffer(FOLDERINFO2& fi, LPTSTR buffer, UINT cch)
 
 LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
+	if (!m_pScanner)
+		return 0;
 	std::vector<ListItem*> items = m_pScanner->GetNewItems();
 	if (!items.empty())
 	{
+		// When reloading the same folder, items already in the list are updated in place, so
+		// the scroll position and the selection are kept. Map each listed item to its row once,
+		// instead of searching the list for each item.
+		map<ListItem*, int> rows;
+		if (m_bReloading)
+		{
+			int count = ListView_GetItemCount(m_lv);
+			for (int row = 0; row < count; row++)
+			{
+				LVITEM lvi = {0};
+				lvi.mask = LVIF_PARAM;
+				lvi.iItem = row;
+				if (ListView_GetItem(m_lv, &lvi))
+					rows[(ListItem*)lvi.lParam] = row;
+			}
+		}
+
 		for (size_t i=0; i<items.size(); i++)
 		{
 			TCHAR buffer[50];
@@ -889,25 +978,22 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 			TCHAR szName[MAX_PATH + 2];
 			wsprintf(szName, _T("%s "), items[i]->GetName());
 
-			// When reloading the same folder, an item that is already in the list is updated in
-			// place, so the scroll position and the selection are kept.
 			map<wstring, ListItem*>::iterator existing = m_nameMap.find(items[i]->GetFileName());
 			if (m_bReloading && existing != m_nameMap.end())
 			{
-				LVFINDINFO lvfi;
-				lvfi.flags = LVFI_PARAM;
-				lvfi.lParam = (LPARAM)existing->second;
-				int iFind = ListView_FindItem(m_lv, -1, &lvfi);
-				if (iFind >= 0)
+				map<ListItem*, int>::iterator row = rows.find(existing->second);
+				if (row != rows.end())
 				{
 					LVITEM item = {0};
 					item.mask = LVIF_TEXT | LVIF_IMAGE | LVIF_PARAM;
-					item.iItem = iFind;
+					item.iItem = row->second;
 					item.pszText = szName;
 					item.iImage = items[i]->GetIcon();
 					item.lParam = (LPARAM)items[i];
 					ListView_SetItem(m_lv, &item);
-					ListView_SetItemText(m_lv, iFind, 1, buffer);
+					ListView_SetItemText(m_lv, row->second, 1, buffer);
+					rows.erase(row);
+					rows[items[i]] = item.iItem;
 					delete existing->second;
 					existing->second = items[i];
 					m_staleItems.erase(items[i]->GetFileName());
@@ -924,11 +1010,13 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 			item.lParam = (LPARAM)items[i];
 			item.iItem = ListView_InsertItem(m_lv, &item);
 			ListView_SetItemText(m_lv, item.iItem, 1, buffer);
+			if (m_bReloading)
+				rows[items[i]] = item.iItem;
 
 			m_nameMap[items[i]->GetFileName()] = items[i];
 		}
-		ListView_SortItems(m_lv, GetCompareFunction(m_sort), 0);
-		AdjustSizeForList();
+		// sorted and fitted shortly, once for all the batches that arrive meanwhile
+		ScheduleLayout();
 	}
 	return 0;
 }
@@ -945,29 +1033,91 @@ LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 
 	if (m_bReloading)
 	{
-		for (set<wstring>::iterator itr = m_staleItems.begin(); itr != m_staleItems.end(); itr++)
+		if (!m_staleItems.empty())
 		{
-			map<wstring, ListItem*>::iterator gone = m_nameMap.find(*itr);
-			if (gone == m_nameMap.end())
-				continue;
-			LVFINDINFO lvfi;
-			lvfi.flags = LVFI_PARAM;
-			lvfi.lParam = (LPARAM)gone->second;
-			int iFind = ListView_FindItem(m_lv, -1, &lvfi);
-			if (iFind >= 0)
-				ListView_DeleteItem(m_lv, iFind);
-			delete gone->second;
-			m_nameMap.erase(gone);
+			// Remove from the last row to the first, so the rows still to remove keep their index.
+			for (int row = ListView_GetItemCount(m_lv) - 1; row >= 0; row--)
+			{
+				LVITEM lvi = {0};
+				lvi.mask = LVIF_PARAM;
+				lvi.iItem = row;
+				if (!ListView_GetItem(m_lv, &lvi))
+					continue;
+				ListItem* pItem = (ListItem*)lvi.lParam;
+				if (m_staleItems.find(pItem->GetFileName()) == m_staleItems.end())
+					continue;
+				m_nameMap.erase(pItem->GetFileName());
+				ListView_DeleteItem(m_lv, row);
+				delete pItem;
+			}
 		}
 		m_staleItems.clear();
 		m_bReloading = false;
-		AdjustSizeForList();
 	}
+
+	ApplyLayout();
+
+	m_bScanDone = true;
+	m_nScannedViewItems = (UINT)lParam;
+	if (m_bCheckViewAfterScan)
+		CheckViewComplete();
 	return 0;
+}
+
+// Sorts the list and fits the window to it.
+void FSWindow::ApplyLayout()
+{
+	if (m_bLayoutPending)
+	{
+		KillTimer(LAYOUT_TIMER_ID);
+		m_bLayoutPending = false;
+	}
+	ListView_SortItems(m_lv, GetCompareFunction(m_sort), 0);
+	AdjustSizeForList();
+}
+
+void FSWindow::ScheduleLayout()
+{
+	if (!m_bLayoutPending)
+	{
+		SetTimer(LAYOUT_TIMER_ID, LAYOUT_DELAY_MS);
+		m_bLayoutPending = true;
+	}
+}
+
+// Number of items in File Explorer's view of the folder.
+UINT FSWindow::GetViewItemCount()
+{
+	int count = 0;
+	CComQIPtr<IServiceProvider> psp(m_pWebBrowser);
+	CComPtr<IShellBrowser> psb;
+	CComPtr<IShellView> psv;
+	CComQIPtr<IFolderView> pfv;
+	if (psp && SUCCEEDED(psp->QueryService(SID_STopLevelBrowser, IID_IShellBrowser, (void**)&psb))
+		&& SUCCEEDED(psb->QueryActiveShellView(&psv)))
+	{
+		pfv = psv;
+		if (!pfv || FAILED(pfv->ItemCount(SVGIO_ALLVIEW, &count)))
+			count = 0;
+	}
+	return (UINT)count;
+}
+
+// File Explorer has listed the whole folder, and so has the scanner. If the scanner saw fewer
+// or more items than File Explorer now has, it read the view while it was still being filled
+// (or the folder changed): read the folder again. Otherwise there is nothing more to do, which
+// avoids reading every folder twice.
+void FSWindow::CheckViewComplete()
+{
+	m_bCheckViewAfterScan = false;
+	if (GetViewItemCount() != m_nScannedViewItems)
+		Reload();
 }
 
 void FSWindow::StartScanner()
 {
+	m_bScanDone = false;
+	m_bCheckViewAfterScan = false;
 	m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd, ++m_scanGeneration);
 }
 
@@ -976,6 +1126,8 @@ void FSWindow::StartScanner()
 // added, and the ones not found again are removed when the scan is done (OnEnumDone).
 void FSWindow::Reload()
 {
+	if (m_bOtherLocation)
+		return;
 	if (m_pScanner)
 		m_pScanner->Quit();
 	m_bReloading = true;
@@ -1045,6 +1197,11 @@ LRESULT FSWindow::OnShellChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& b
 
 LRESULT FSWindow::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
+	if (wParam == LAYOUT_TIMER_ID)
+	{
+		ApplyLayout();
+		return 0;
+	}
 	if (wParam != RELOAD_TIMER_ID)
 	{
 		bHandled = FALSE;
@@ -1057,6 +1214,8 @@ LRESULT FSWindow::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandle
 
 LRESULT FSWindow::OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
+	if (!m_pScanner)
+		return 0;
 	std::vector<RefreshItem*> items = m_pScanner->GetRefreshItems();
 	if (!items.empty())
 	{
@@ -1236,7 +1395,8 @@ void FSWindow::CreateIfUnminimizedFolderView()
 							if (SUCCEEDED(ppf2->GetCurFolder(&pFolderID)))
 							{
 								TCHAR szFolder[MAX_PATH];
-								if (SHGetPathFromIDList(pFolderID, szFolder))
+								// a folder on a drive, or This PC (the drives and their used space)
+								if (SHGetPathFromIDList(pFolderID, szFolder) || IsThisPC(pFolderID))
 								{
 									HWND hwndExplorer;
 									if (SUCCEEDED(m_pWebBrowser->get_HWND((SHANDLE_PTR*)&hwndExplorer)))
@@ -1351,7 +1511,7 @@ void FSWindow::UpdateTabVisibility(HWND hwndActiveTab, const RECT* prcPrevious)
 {
 	if (m_hWnd == NULL)
 		return;
-	bool bActive = IsTab(hwndActiveTab);
+	bool bActive = IsTab(hwndActiveTab) && !m_bOtherLocation;
 	if (bActive && !IsWindowVisible())
 	{
 		if (prcPrevious)
@@ -1397,10 +1557,24 @@ void FSWindow::StopWatchingFolderView()
 	}
 }
 
+void FSWindow::ShowForLocation(bool bShow)
+{
+	m_bOtherLocation = !bShow;
+	if (!bShow)
+		ShowWindow(SW_HIDE);
+	else if (!IsWindowVisible() && (m_hwndTab == NULL || m_hwndTab == GetActiveTab(m_hwndExplorer)))
+		ShowWindow(SW_SHOWNOACTIVATE);
+}
+
 void FSWindow::OnFileListEnumDone()
 {
-	if (m_hWnd)
-		Reload();
+	if (!m_hWnd || m_bOtherLocation)
+		return;
+	// Compare with what the scanner saw once it is done (see CheckViewComplete).
+	if (m_bScanDone)
+		CheckViewComplete();
+	else
+		m_bCheckViewAfterScan = true;
 }
 
 void FSWindow::OnNavigateComplete(IDispatch* pDisp, VARIANT* URL)
@@ -1412,13 +1586,29 @@ void FSWindow::OnNavigateComplete(IDispatch* pDisp, VARIANT* URL)
 	}
 	else
 	{
-		m_pScanner->Quit();
+		if (m_pScanner)
+			m_pScanner->Quit();
+		m_pScanner = NULL;
 		KillTimer(RELOAD_TIMER_ID);
 		m_bReloading = false;
 		m_staleItems.clear();
 
 		// the notification from the control will clean up the old items
 		ListView_DeleteAllItems(m_lv);
+
+		// Hide the window on locations it doesn't show (such as Home or Network), and show it again
+		// when coming back to a folder or to This PC.
+		LPITEMIDLIST pidl = GetBrowserFolder(m_pWebBrowser);
+		FolderKind kind = GetFolderKind(pidl);
+		CoTaskMemFree(pidl);
+		if (kind == FOLDER_OTHER)
+		{
+			StopWatchingFolderChanges();
+			StopWatchingFolderView();
+			ShowForLocation(false);
+			return;
+		}
+		ShowForLocation(true);
 
 		AdjustSizeForList();
 
