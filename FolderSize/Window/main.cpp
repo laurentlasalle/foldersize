@@ -111,6 +111,57 @@ static FolderKind GetFolderKind(LPCITEMIDLIST pidl)
 	return IsThisPC(pidl) ? FOLDER_THIS_PC : FOLDER_OTHER;
 }
 
+// TEMPORARY measurement log, to remove once the cost of entering a folder is measured.
+// Enabled only while the file %TEMP%\FolderSize.log exists (create it empty to start logging,
+// delete it to stop). Each line is appended as UTF-8 text.
+static bool GetMeasureLogPath(WCHAR* pszPath)
+{
+	DWORD cch = GetTempPathW(MAX_PATH, pszPath);
+	if (cch == 0 || cch >= MAX_PATH - 20)
+		return false;
+	lstrcatW(pszPath, L"FolderSize.log");
+	return GetFileAttributesW(pszPath) != INVALID_FILE_ATTRIBUTES;
+}
+
+static void MeasureLog(LPCWSTR pszFormat, ...)
+{
+	WCHAR szPath[MAX_PATH];
+	if (!GetMeasureLogPath(szPath))
+		return;
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	WCHAR szLine[1200];
+	int cch = wsprintfW(szLine, L"%02d:%02d:%02d.%03d ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+	va_list args;
+	va_start(args, pszFormat);
+	cch += wvsprintfW(szLine + cch, pszFormat, args);
+	va_end(args);
+	lstrcatW(szLine, L"\r\n");
+	char szUtf8[3600];
+	int cb = WideCharToMultiByte(CP_UTF8, 0, szLine, -1, szUtf8, sizeof(szUtf8), NULL, NULL);
+	if (cb <= 1)
+		return;
+	HANDLE hFile = CreateFileW(szPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hFile != INVALID_HANDLE_VALUE)
+	{
+		DWORD cbWritten;
+		WriteFile(hFile, szUtf8, cb - 1, &cbWritten, NULL);
+		CloseHandle(hFile);
+	}
+}
+
+// CPU time used so far by the whole FolderSize.exe process (all threads), in 100 ns units.
+static ULONGLONG GetProcessCpuTime()
+{
+	FILETIME ftCreation, ftExit, ftKernel, ftUser;
+	if (!GetProcessTimes(GetCurrentProcess(), &ftCreation, &ftExit, &ftKernel, &ftUser))
+		return 0;
+	ULARGE_INTEGER kernel, user;
+	kernel.LowPart = ftKernel.dwLowDateTime; kernel.HighPart = ftKernel.dwHighDateTime;
+	user.LowPart = ftUser.dwLowDateTime; user.HighPart = ftUser.dwHighDateTime;
+	return kernel.QuadPart + user.QuadPart;
+}
+
 #define WM_NEWITEMS      (WM_APP + 1)
 #define WM_REFRESHITEMS  (WM_APP + 2)
 // Posted by a scanner when it has listed all the items of the folder. wParam is the scanner's
@@ -722,12 +773,18 @@ private:
 	bool m_bCheckViewAfterScan; // File Explorer finished listing the folder before the scanner
 	bool m_bLayoutPending;    // LAYOUT_TIMER_ID is set
 	bool m_bOtherLocation;    // File Explorer shows a location the window doesn't show (hidden)
+
+	// TEMPORARY measurement log (see MeasureLog)
+	void MeasureFolderName(WCHAR* pszName);
+	LPCWSTR m_measureReason;      // why the current scan started: "open" or "reload"
+	ULONGLONG m_measureStartTick; // GetTickCount64 when it started
+	ULONGLONG m_measureStartCpu;  // GetProcessCpuTime when it started
 	set<wstring> m_staleItems; // while reloading: items not found again yet
 	CComPtr<IDispatch> m_pFolderView;  // File Explorer's view of the folder, for its EnumDone event
 	ULONG m_changeNotifyId;   // registration for change notifications of the folder (0 if none)
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bOtherLocation(false), m_changeNotifyId(0)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bOtherLocation(false), m_measureReason(L"open"), m_measureStartTick(0), m_measureStartCpu(0), m_changeNotifyId(0)
 {
 	BrowserEvents::DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -1057,6 +1114,16 @@ LRESULT FSWindow::OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 
 	ApplyLayout();
 
+	{
+		WCHAR szName[MAX_PATH];
+		MeasureFolderName(szName);
+		MeasureLog(L"%s done: %d rows, %d items in view when listed, %d ms, CPU %d ms, %s",
+			m_measureReason, ListView_GetItemCount(m_lv), (int)lParam,
+			(int)(GetTickCount64() - m_measureStartTick),
+			(int)((GetProcessCpuTime() - m_measureStartCpu) / 10000), szName);
+		m_measureReason = L"open";
+	}
+
 	m_bScanDone = true;
 	m_nScannedViewItems = (UINT)lParam;
 	if (m_bCheckViewAfterScan)
@@ -1110,14 +1177,20 @@ UINT FSWindow::GetViewItemCount()
 void FSWindow::CheckViewComplete()
 {
 	m_bCheckViewAfterScan = false;
-	if (GetViewItemCount() != m_nScannedViewItems)
+	UINT nViewItems = GetViewItemCount();
+	MeasureLog(L"File Explorer list done: %u items in view, %u when listed, %s",
+		nViewItems, m_nScannedViewItems, nViewItems != m_nScannedViewItems ? L"reloading" : L"no reload");
+	if (nViewItems != m_nScannedViewItems)
 		Reload();
 }
+
 
 void FSWindow::StartScanner()
 {
 	m_bScanDone = false;
 	m_bCheckViewAfterScan = false;
+	m_measureStartTick = GetTickCount64();
+	m_measureStartCpu = GetProcessCpuTime();
 	m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd, ++m_scanGeneration);
 }
 
@@ -1131,6 +1204,7 @@ void FSWindow::Reload()
 	if (m_pScanner)
 		m_pScanner->Quit();
 	m_bReloading = true;
+	m_measureReason = L"reload";
 	m_staleItems.clear();
 	for (map<wstring, ListItem*>::iterator itr = m_nameMap.begin(); itr != m_nameMap.end(); itr++)
 		m_staleItems.insert(itr->first);
@@ -1154,6 +1228,19 @@ static LPITEMIDLIST GetBrowserFolder(IWebBrowser2* pWebBrowser)
 		ppf2->GetCurFolder(&pidl);
 	}
 	return pidl;
+}
+
+// Path of the folder, or "This PC", for the measurement log.
+void FSWindow::MeasureFolderName(WCHAR* pszName)
+{
+	lstrcpyW(pszName, L"This PC");
+	LPITEMIDLIST pidl = GetBrowserFolder(m_pWebBrowser);
+	if (pidl)
+	{
+		if (!SHGetPathFromIDListW(pidl, pszName))
+			lstrcpyW(pszName, L"This PC");
+		CoTaskMemFree(pidl);
+	}
 }
 
 // Asks Windows to report changes in the folder shown (only that folder, not its subfolders).
