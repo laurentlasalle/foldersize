@@ -37,7 +37,7 @@ static bool GetLogicalFileSize(LPCTSTR pFileName, ULONGLONG& nSize)
 class ListItem
 {
 public:
-	ListItem(LPCTSTR filename, LPITEMIDLIST pidl, FOLDERINFO2& size, int index, int icon, LPCTSTR name) : m_pidl(pidl), m_size(size), m_index(index), m_icon(icon)
+	ListItem(LPCTSTR filename, LPITEMIDLIST pidl, FOLDERINFO2& size, int index, int icon, LPCTSTR name, bool isFolder) : m_pidl(pidl), m_size(size), m_index(index), m_icon(icon), m_isFolder(isFolder)
 	{
 		lstrcpyn(m_filename, filename, MAX_PATH);
 		lstrcpyn(m_name, name, MAX_PATH);
@@ -53,6 +53,7 @@ public:
 	int GetIndex() { return m_index; }
 	int GetIcon() { return m_icon; }
 	LPCTSTR GetName() { return m_name; }
+	bool IsFolder() { return m_isFolder; }
 	
 	void UpdateSize(FOLDERINFO2& size) { m_size = size; }
 
@@ -60,6 +61,7 @@ private:
 	LPITEMIDLIST m_pidl;
 	FOLDERINFO2 m_size;
 	int m_index;
+	bool m_isFolder;
 	int m_icon;
 	TCHAR m_filename[MAX_PATH];
 	TCHAR m_name[MAX_PATH];
@@ -243,7 +245,7 @@ DWORD FolderViewScanner::ThreadProc()
 											}
 
 											// the ListItem takes ownership of the PIDL
-											ListItem* pItem = new ListItem(PathFindFileName(pPath), pItemID, fi, index++, shfi.iIcon, shfi.szDisplayName);
+											ListItem* pItem = new ListItem(PathFindFileName(pPath), pItemID, fi, index++, shfi.iIcon, shfi.szDisplayName, bIsDirectory);
 											pItemID = NULL;
 
 											EnterCriticalSection(&m_cs);
@@ -484,6 +486,10 @@ static HWND FindTabWindow(HWND hwnd)
 	return NULL;
 }
 
+int CALLBACK compareIndex(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort);
+int CALLBACK compareName(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort);
+int CALLBACK compareSize(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort);
+
 class FSWindow :
 	public CWindowImpl<FSWindow, CWindow, CWinTraits<WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_SIZEBOX, WS_EX_TOOLWINDOW> >,
 	public IDispEventSimpleImpl<1, FSWindow, &DIID_DWebBrowserEvents2>
@@ -553,9 +559,10 @@ private:
 	TCHAR m_szFolder[MAX_PATH * 4];
 	FolderViewScanner* m_pScanner;
 	std::map<std::wstring, ListItem*> m_nameMap;
+	PFNLVCOMPARE m_pfnSort;  // current sort order (compareIndex = File Explorer's order)
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_pWebBrowser(pWebBrowser), m_pScanner(NULL)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_pfnSort(compareIndex)
 {
 	DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -748,6 +755,8 @@ LRESULT FSWindow::OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHan
 
 			m_nameMap.insert(pair<wstring, ListItem*>(items[i]->GetFileName(), items[i]));
 		}
+		if (m_pfnSort != compareIndex)
+			ListView_SortItems(m_lv, m_pfnSort, 0);
 		AdjustSizeForList();
 	}
 	return 0;
@@ -782,6 +791,8 @@ LRESULT FSWindow::OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& 
 			}
 			delete items[i];
 		}
+		if (m_pfnSort == compareSize)
+			ListView_SortItems(m_lv, m_pfnSort, 0);
 		AdjustSizeForList();
 	}
 	return 0;
@@ -793,9 +804,26 @@ LRESULT FSWindow::OnClose(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandle
 	return 0;
 }
 
+// Sort orders of the list. The window opens with the order of File Explorer; clicking a column
+// header switches to that column's order, which is then kept when the folder content changes.
+//   compareIndex: the order File Explorer showed (folders first)
+//   compareName:  alphabetical, folders and files mixed, so "Games" and "Games.zip" are next to
+//                 each other. Uses the same comparison as File Explorer (StrCmpLogicalW: case
+//                 insensitive, numbers in numeric order, "Disc 2" before "Disc 10").
+//   compareSize:  largest first
 int CALLBACK compareIndex(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 {
 	return ((ListItem*)lParam1)->GetIndex() - ((ListItem*)lParam2)->GetIndex();
+}
+
+int CALLBACK compareName(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
+{
+	ListItem* p1 = (ListItem*)lParam1;
+	ListItem* p2 = (ListItem*)lParam2;
+	int result = StrCmpLogicalW(p1->GetName(), p2->GetName());
+	if (result == 0 && p1->IsFolder() != p2->IsFolder())
+		result = p1->IsFolder() ? -1 : 1;  // same name: the folder goes first
+	return result;
 }
 
 int CALLBACK compareSize(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
@@ -834,8 +862,8 @@ LRESULT FSWindow::OnItemActivate(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
 LRESULT FSWindow::OnColumnClick(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
 {
 	LPNMLISTVIEW pnmlv = (LPNMLISTVIEW)pnmh;
-	PFNLVCOMPARE compareFunc = pnmlv->iSubItem == 0 ? compareIndex : compareSize;
-	ListView_SortItems(m_lv, compareFunc, 0);
+	m_pfnSort = pnmlv->iSubItem == 0 ? compareName : compareSize;
+	ListView_SortItems(m_lv, m_pfnSort, 0);
 	return 0;
 }
 
