@@ -23,6 +23,9 @@
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <!-- Include the extension in the PDB name: FolderSize.exe and FolderSize.cpl share the same output
+           folder and base name, and would otherwise both write FolderSize.pdb (fails in parallel builds). -->
+      <ProgramDatabaseFile>$(OutDir)$(TargetName)$(TargetExt).pdb</ProgramDatabaseFile>
     </Link>
   </ItemDefinitionGroup>
 
