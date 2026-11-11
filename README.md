@@ -19,9 +19,14 @@ contributors include Brio, Kirill Müller and eisber.
 
 ## Building
 
-The project is written in C++. Open `FolderSize/FolderSize.sln` in
-Visual Studio. The solution was last saved with Visual Studio 2005, so it
-still needs to be upgraded to a current version of Visual Studio.
+The project is written in C++ and builds with Visual Studio 2022 for x64.
+Open `FolderSize/FolderSize.sln` and build the Release x64 configuration.
+The files are written to `FolderSize/Release/x64`. To create the
+installer, run `FolderSize/MSI/BuildMSI64.bat` after building.
+
+Every push is also built on GitHub Actions. The installer
+(`FolderSize64.msi`) and the program files can be downloaded from the
+run's Artifacts section on the Actions page.
 
 ## License
 
