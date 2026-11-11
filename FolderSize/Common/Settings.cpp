@@ -25,9 +25,14 @@ void SaveDWord(HKEY hKey, LPCTSTR lpValueName, DWORD dw)
 std::wstring LoadLanguageSetting()
 {
 	WCHAR szCode[32] = L"";
-	DWORD cb = sizeof(szCode);
-	if (RegGetValueW(HKEY_CURRENT_USER, USER_SETTINGS_KEY, L"Language", RRF_RT_REG_SZ, NULL, szCode, &cb) != ERROR_SUCCESS)
-		return std::wstring();
+	HKEY hKey;
+	if (RegOpenKeyExW(HKEY_CURRENT_USER, USER_SETTINGS_KEY, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+	{
+		DWORD dwType, cb = sizeof(szCode) - sizeof(WCHAR);  // keep room for a terminating null
+		if (RegQueryValueExW(hKey, L"Language", NULL, &dwType, (LPBYTE)szCode, &cb) != ERROR_SUCCESS || dwType != REG_SZ)
+			szCode[0] = L'\0';
+		RegCloseKey(hKey);
+	}
 	return szCode;
 }
 
