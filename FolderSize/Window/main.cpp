@@ -423,6 +423,11 @@ static void AllowDarkMenus()
 // the DPI), so the "Name" header and the icons line up with the window title.
 static const int LIST_MARGIN_X_DIP = 3;
 
+// Extra width added to the Size column, in DIPs. Its numbers are right-aligned, so this is the
+// space between the column separator and the longest size; it matches the space between the
+// left edge and "Name".
+static const int SIZE_COLUMN_EXTRA_DIP = 3;
+
 // Colors of the list in dark mode, matching the dark File Explorer.
 static const COLORREF DARK_BACKGROUND = RGB(0x19, 0x19, 0x19);
 static const COLORREF DARK_TEXT = RGB(0xFF, 0xFF, 0xFF);
@@ -917,11 +922,12 @@ void FSWindow::AdjustSizeForList()
 	DWORD dwExLvStyle = ListView_GetExtendedListViewStyle(m_lv);
 	ListView_SetExtendedListViewStyle(m_lv, dwExLvStyle & ~LVS_EX_AUTOSIZECOLUMNS);
 
-	ListView_SetColumnWidth(m_lv, 0, LVSCW_AUTOSIZE);
-	ListView_SetColumnWidth(m_lv, 1, LVSCW_AUTOSIZE);
-
 	// Use the measurements for the DPI of the monitor the window is on.
 	UINT dpi = GetDpiForWindow(m_hWnd);
+
+	ListView_SetColumnWidth(m_lv, 0, LVSCW_AUTOSIZE);
+	ListView_SetColumnWidth(m_lv, 1, LVSCW_AUTOSIZE);
+	ListView_SetColumnWidth(m_lv, 1, ListView_GetColumnWidth(m_lv, 1) + MulDiv(SIZE_COLUMN_EXTRA_DIP, dpi, 96));
 
 	// get the original window position and coordinates of the monitor it's on
 	RECT rc;
