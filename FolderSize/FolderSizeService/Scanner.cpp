@@ -186,8 +186,12 @@ bool Scanner::GetAnItemFromTheQueue(Path& path)
 		ResetEvent(m_hScanEvent);
 		if (m_pCallback->GetNextScanFolder(path))
 		{
+			// there is work: watch how busy the disk is (see ThreadProc)
+			m_pPerformanceMonitor->SetActive(true);
 			return true;
 		}
+		// Nothing to scan: stop watching the disk while this thread sleeps.
+		m_pPerformanceMonitor->SetActive(false);
 		HANDLE hHandles[2];
 		hHandles[0] = m_hQuitEvent;
 		hHandles[1] = m_hScanEvent;
@@ -211,7 +215,9 @@ void Scanner::ThreadProc()
 	while ((GetAnItemFromTheQueue(path)))
 	{
 		ScanFolder(path);
-		// if the queue length is too long, wait for a bit
+		// If the disk is busy with other programs (its queue of waiting requests is long, see
+		// PerformanceMonitor), pause between folders until it calms down, checking again at each
+		// reading of the counter, so the scan doesn't slow those programs down.
 		while (m_pPerformanceMonitor->IsDiskQueueTooLong())
 		{
 			if (WaitForSingleObject(m_hQuitEvent, PERFORMANCE_UPDATE_FREQUENCY) == WAIT_OBJECT_0)
