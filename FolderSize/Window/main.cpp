@@ -837,6 +837,7 @@ BEGIN_MSG_MAP(FSWindow)
 	MESSAGE_HANDLER(WM_KILLWINDOW, OnKillWindow)
 	COMMAND_ID_HANDLER(ID_SHOW, OnShowPopups)
 	COMMAND_ID_HANDLER(ID_START, OnStart)
+	COMMAND_ID_HANDLER(ID_SETTINGS, OnSettings)
 	COMMAND_ID_HANDLER(ID_EXIT, OnExit)
 END_MSG_MAP()
 
@@ -852,6 +853,7 @@ END_SINK_MAP()
 	LRESULT OnKillWindow(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnShowPopups(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	LRESULT OnStart(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
+	LRESULT OnSettings(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	LRESULT OnExit(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled);
 	void __stdcall OnWindowRegistered(long lCookie);
 
@@ -1082,6 +1084,24 @@ LRESULT ShellWindowManager::OnStart(WORD wNotifyCode, WORD wID, HWND hWndCtl, BO
 	{
 		SetAutoRun();
 	}
+	return 0;
+}
+
+LRESULT ShellWindowManager::OnSettings(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL& bHandled)
+{
+	// The settings live in the Control Panel item FolderSize.cpl, installed in the same folder
+	// as this program. Open it through control.exe, as Control Panel itself does, so it is the
+	// same panel whether it is opened from here or from Control Panel.
+	TCHAR szCpl[MAX_PATH + 2];
+	szCpl[0] = _T('"');
+	DWORD dw = GetModuleFileName(NULL, szCpl + 1, MAX_PATH);
+	if (dw == 0 || dw >= MAX_PATH)
+		return 0;
+	PathRemoveFileSpec(szCpl + 1);
+	if (!PathAppend(szCpl + 1, _T("FolderSize.cpl")))
+		return 0;
+	lstrcat(szCpl, _T("\""));
+	ShellExecute(NULL, _T("open"), _T("control.exe"), szCpl, NULL, SW_SHOWNORMAL);
 	return 0;
 }
 

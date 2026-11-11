@@ -92,6 +92,9 @@ BEGIN
     BEGIN
         MENUITEM "Show &Folder Size popups",    ID_SHOW
         MENUITEM "Start on &Windows startup",   ID_START
+        MENUITEM SEPARATOR
+        MENUITEM "&Settings...",                ID_SETTINGS
+        MENUITEM SEPARATOR
         MENUITEM "E&xit",                       ID_EXIT
     END
 END
