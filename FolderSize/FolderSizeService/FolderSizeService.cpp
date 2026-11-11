@@ -15,6 +15,31 @@ void RegisterServiceDescription(SC_HANDLE hService)
 	ChangeServiceConfig2(hService, SERVICE_CONFIG_DESCRIPTION, &sd);
 }
 
+// The event source of the service in the Application event log, and the file holding its
+// message table (see Messages.mc). The installer writes the same values (Registry table of the
+// MSI); these are for FolderSizeSvc.exe -install and -remove.
+static const TCHAR EVENT_SOURCE_KEY[] = TEXT("SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\") SERVICE_NAME;
+
+void RegisterEventLogSource()
+{
+	TCHAR szModulePathname[MAX_PATH];
+	GetModuleFileName(NULL, szModulePathname, countof(szModulePathname));
+	HKEY hKey;
+	if (RegCreateKeyEx(HKEY_LOCAL_MACHINE, EVENT_SOURCE_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+	{
+		RegSetValueEx(hKey, TEXT("EventMessageFile"), 0, REG_SZ, (const BYTE*)szModulePathname,
+			(lstrlen(szModulePathname) + 1) * sizeof(TCHAR));
+		DWORD dwTypes = EVENTLOG_ERROR_TYPE | EVENTLOG_WARNING_TYPE | EVENTLOG_INFORMATION_TYPE;
+		RegSetValueEx(hKey, TEXT("TypesSupported"), 0, REG_DWORD, (const BYTE*)&dwTypes, sizeof(dwTypes));
+		RegCloseKey(hKey);
+	}
+}
+
+void UnregisterEventLogSource()
+{
+	RegDeleteKey(HKEY_LOCAL_MACHINE, EVENT_SOURCE_KEY);
+}
+
 class Service
 {
 public:
@@ -205,6 +230,7 @@ void InstallService()
 		{
 			RegisterServiceDescription(hService);
 			CloseServiceHandle(hService);
+			RegisterEventLogSource();
 		}
 
 		CloseServiceHandle(hSCM);
@@ -226,6 +252,7 @@ void RemoveService()
 			// Remove this service from	the	SCM's database.
 			DeleteService(hService);
 			CloseServiceHandle(hService);
+			UnregisterEventLogSource();
 		}
 		CloseServiceHandle(hSCM);
 	}

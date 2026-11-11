@@ -94,11 +94,15 @@ void Scanner::ScanFolder(const Path& path)
 			m_pCallback->GotScanResult(path, nSize, nTime.QuadPart);
 			return;
 		}
-		// we could be legitimately denied access to this folder
-		if (dwError != ERROR_ACCESS_DENIED)
+		// We could be legitimately denied access to this folder, and the folder may have been
+		// deleted or moved since it was found (ERROR_PATH_NOT_FOUND): the cache hears about that
+		// from the file system notifications. Report only other errors. (The error is reported
+		// as read above: calling GetLastError again here returned 0 when this was the first
+		// event since the service started, as opening the event log resets it.)
+		if (dwError != ERROR_ACCESS_DENIED && dwError != ERROR_PATH_NOT_FOUND)
 		{
 			// this is an unexpected error!
-			EventLog::Instance().ReportError(_T("Scanner FindFirstFile"), GetLastError());
+			EventLog::Instance().ReportError(_T("Scanner FindFirstFile"), dwError);
 		}
 		// don't call GotScanResult, so we will never be asked to scan this folder again
 		return;
@@ -131,9 +135,13 @@ void Scanner::ScanFolder(const Path& path)
 					Path filePath = path + Path(FindData.cFileName);
 					DWORD dwSizeHigh;
 					DWORD dwSizeLow = GetCompressedFileSize(filePath.GetLongAPIRepresentation().c_str(), &dwSizeHigh);
-					if (dwSizeLow == INVALID_FILE_SIZE && GetLastError() != NO_ERROR)
+					DWORD dwError = (dwSizeLow == INVALID_FILE_SIZE) ? GetLastError() : NO_ERROR;
+					if (dwError != NO_ERROR)
 					{
-						EventLog::Instance().ReportError(_T("Scanner GetCompressedFileSize"), GetLastError());
+						// The file may have been deleted or moved since the folder was listed;
+						// report only other errors.
+						if (dwError != ERROR_FILE_NOT_FOUND && dwError != ERROR_PATH_NOT_FOUND)
+							EventLog::Instance().ReportError(_T("Scanner GetCompressedFileSize"), dwError);
 						// just use the regular size that we have i guess
 						nSize.nPhysicalSize += MakeULongLong(FindData.nFileSizeHigh, FindData.nFileSizeLow);
 					}
@@ -155,9 +163,10 @@ void Scanner::ScanFolder(const Path& path)
 		}
 	} while (FindNextFile(hFind, &FindData));
 
-	if (GetLastError() != ERROR_NO_MORE_FILES)
+	DWORD dwError = GetLastError();
+	if (dwError != ERROR_NO_MORE_FILES)
 	{
-		EventLog::Instance().ReportError(_T("Scanner FindNextFile"), GetLastError());
+		EventLog::Instance().ReportError(_T("Scanner FindNextFile"), dwError);
 	}
 
 	FindClose(hFind);

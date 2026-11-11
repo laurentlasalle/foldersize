@@ -2,3 +2,5 @@ Registry	Root	Key	Name	Value	Component_
 s72	i2	l255	L255	L0	s72
 Registry	Registry
 RegCpl	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cpls	Folder Size	[#FolderSize.cpl]	ControlPanel
+RegEventMessageFile	2	SYSTEM\CurrentControlSet\Services\EventLog\Application\FolderSize	EventMessageFile	[#FolderSizeSvc.exe]	Service
+RegEventTypes	2	SYSTEM\CurrentControlSet\Services\EventLog\Application\FolderSize	TypesSupported	#7	Service

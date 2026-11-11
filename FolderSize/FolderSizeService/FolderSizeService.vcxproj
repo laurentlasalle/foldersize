@@ -49,6 +49,8 @@
       <AdditionalDependencies>pdh.lib;shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ResourceCompile>
+      <!-- for the message table compiled from Messages.mc (see below) -->
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -90,7 +92,17 @@
     <ClInclude Include="..\Common\Settings.h" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The messages of the Application event log: mc.exe (Windows SDK) writes Messages.rc and
+         MSG00409.bin to the intermediate folder, and Messages.rc is compiled with the resources. -->
+    <CustomBuild Include="Messages.mc">
+      <Command>mc.exe -h "$(IntDir)." -r "$(IntDir)." "%(FullPath)"</Command>
+      <Message>Compiling the event log messages (Messages.mc)</Message>
+      <Outputs>$(IntDir)Messages.rc;$(IntDir)Messages.h;$(IntDir)MSG00409.bin</Outputs>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
     <ResourceCompile Include="FolderSizeService.rc" />
+    <ResourceCompile Include="$(IntDir)Messages.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
