@@ -419,6 +419,10 @@ static void AllowDarkMenus()
 		pfnFlushMenuThemes();
 }
 
+// Space between the list and the left and right edges of the window, in DIPs (scaled with
+// the DPI), so the "Name" header and the icons line up with the window title.
+static const int LIST_MARGIN_X_DIP = 3;
+
 // Colors of the list in dark mode, matching the dark File Explorer.
 static const COLORREF DARK_BACKGROUND = RGB(0x19, 0x19, 0x19);
 static const COLORREF DARK_TEXT = RGB(0xFF, 0xFF, 0xFF);
@@ -489,6 +493,7 @@ BEGIN_MSG_MAP(FSWindow)
 	MESSAGE_HANDLER(WM_CREATE, OnCreate)
 	MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
 	MESSAGE_HANDLER(WM_SIZE, OnSize)
+	MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBkgnd)
 	MESSAGE_HANDLER(WM_DPICHANGED, OnDpiChanged)
 	MESSAGE_HANDLER(WM_SETTINGCHANGE, OnSettingChange)
 	MESSAGE_HANDLER(WM_NEWITEMS, OnNewItems)
@@ -502,6 +507,7 @@ END_MSG_MAP()
 	LRESULT OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnEraseBkgnd(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -530,6 +536,8 @@ private:
 	void AdjustSizeForList();
 	void UpdateFontForDpi();
 	void ApplyTheme();
+	int GetListMarginX();
+	COLORREF GetBackgroundColor() const;
 
 	HWND m_lv;
 	HFONT m_hFont;
@@ -561,8 +569,9 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 {
 	RECT rc;
 	GetClientRect(&rc);
+	int marginX = GetListMarginX();
 	m_lv = CreateWindow(WC_LISTVIEW, NULL, WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHAREIMAGELISTS | LVS_SINGLESEL,
-		0, 0, rc.right-rc.left, rc.bottom-rc.top,
+		marginX, 0, max(0, (int)(rc.right-rc.left) - 2 * marginX), rc.bottom-rc.top,
 		m_hWnd, (HMENU)1, (HINSTANCE)GetWindowLongPtr(GWLP_HINSTANCE), NULL);
 	if (!m_lv)
 		return -1;
@@ -651,13 +660,13 @@ void FSWindow::ApplyTheme()
 	// List, scroll bars and column header
 	SetWindowTheme(m_lv, m_bDark ? L"DarkMode_Explorer" : L"Explorer", NULL);
 	SetWindowTheme(ListView_GetHeader(m_lv), m_bDark ? L"DarkMode_ItemsView" : NULL, NULL);
-	COLORREF background = m_bDark ? DARK_BACKGROUND : GetSysColor(COLOR_WINDOW);
+	COLORREF background = GetBackgroundColor();
 	COLORREF text = m_bDark ? DARK_TEXT : GetSysColor(COLOR_WINDOWTEXT);
 	ListView_SetBkColor(m_lv, background);
 	ListView_SetTextBkColor(m_lv, background);
 	ListView_SetTextColor(m_lv, text);
 
-	::RedrawWindow(m_lv, NULL, NULL, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN | RDW_ERASE);
+	::RedrawWindow(m_hWnd, NULL, NULL, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN | RDW_ERASE);
 }
 
 // Windows broadcasts "ImmersiveColorSet" when the app mode (light/dark) changes.
@@ -671,8 +680,31 @@ LRESULT FSWindow::OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL&
 
 LRESULT FSWindow::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
-	::MoveWindow(m_lv, 0, 0, LOWORD(lParam), HIWORD(lParam), TRUE);
+	int marginX = GetListMarginX();
+	::MoveWindow(m_lv, marginX, 0, max(0, (int)LOWORD(lParam) - 2 * marginX), HIWORD(lParam), TRUE);
 	return 0;
+}
+
+int FSWindow::GetListMarginX()
+{
+	return MulDiv(LIST_MARGIN_X_DIP, GetDpiForWindow(m_hWnd), 96);
+}
+
+COLORREF FSWindow::GetBackgroundColor() const
+{
+	return m_bDark ? DARK_BACKGROUND : GetSysColor(COLOR_WINDOW);
+}
+
+// Paint the margins on each side of the list with the list's background color, so they look
+// like part of the list rather than a frame.
+LRESULT FSWindow::OnEraseBkgnd(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	RECT rc;
+	GetClientRect(&rc);
+	HBRUSH hBrush = CreateSolidBrush(GetBackgroundColor());
+	FillRect((HDC)wParam, &rc, hBrush);
+	DeleteObject(hBrush);
+	return 1;
 }
 
 static void FormatFolderInfoBuffer(FOLDERINFO2& fi, LPTSTR buffer, UINT cch)
@@ -910,6 +942,10 @@ void FSWindow::AdjustSizeForList()
 	else
 		rc.right = rc.left + approxWidth;
 	rc.bottom = rc.top + approxHeight;
+	// rc is the list; the client area also holds the margins on each side of it.
+	int marginX = MulDiv(LIST_MARGIN_X_DIP, dpi, 96);
+	rc.left -= marginX;
+	rc.right += marginX;
 	AdjustWindowRectExForDpi(&rc, GetWindowLong(GWL_STYLE), FALSE, GetWindowLong(GWL_EXSTYLE), dpi);
 
 	// if the title bar somehow got too high for the screen, align it with the top of the monitor
