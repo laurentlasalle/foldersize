@@ -436,7 +436,9 @@ public:
 
 BEGIN_MSG_MAP(FSWindow)
 	MESSAGE_HANDLER(WM_CREATE, OnCreate)
+	MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
 	MESSAGE_HANDLER(WM_SIZE, OnSize)
+	MESSAGE_HANDLER(WM_DPICHANGED, OnDpiChanged)
 	MESSAGE_HANDLER(WM_NEWITEMS, OnNewItems)
 	MESSAGE_HANDLER(WM_REFRESHITEMS, OnRefreshItems)
 	MESSAGE_HANDLER(WM_CLOSE, OnClose)
@@ -446,7 +448,9 @@ BEGIN_MSG_MAP(FSWindow)
 END_MSG_MAP()
 
 	LRESULT OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+	LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnClose(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -467,15 +471,17 @@ END_SINK_MAP()
 private:
 	void CreateIfUnminimizedFolderView();
 	void AdjustSizeForList();
+	void UpdateFontForDpi();
 
 	HWND m_lv;
+	HFONT m_hFont;
 	CComPtr<IWebBrowser2> m_pWebBrowser;
 	TCHAR m_szFolder[MAX_PATH * 4];
 	FolderViewScanner* m_pScanner;
 	std::map<std::wstring, ListItem*> m_nameMap;
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_pWebBrowser(pWebBrowser), m_pScanner(NULL)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_pWebBrowser(pWebBrowser), m_pScanner(NULL)
 {
 	DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -503,6 +509,7 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 	ListView_SetExtendedListViewStyle(m_lv, LVS_EX_FULLROWSELECT | LVS_EX_AUTOSIZECOLUMNS | LVS_EX_DOUBLEBUFFER);
 
 	SetWindowTheme(m_lv, L"Explorer", NULL);
+	UpdateFontForDpi();
 
 	LVCOLUMN column;
 	column.mask = LVCF_FMT | LVCF_TEXT;
@@ -523,6 +530,48 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 
 	m_pScanner = new FolderViewScanner(m_pWebBrowser, m_hWnd);
 
+	return 0;
+}
+
+LRESULT FSWindow::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	if (m_hFont)
+	{
+		DeleteObject(m_hFont);
+		m_hFont = NULL;
+	}
+	return 0;
+}
+
+// The program is per-monitor DPI aware (see Window.manifest): Windows doesn't scale it, so it
+// must draw at the DPI of the monitor the window is on. Controls created with CreateWindow keep
+// the font they were given, so give the list the system font scaled for the window's DPI.
+void FSWindow::UpdateFontForDpi()
+{
+	UINT dpi = GetDpiForWindow(m_hWnd);
+	LOGFONT lf;
+	if (!SystemParametersInfoForDpi(SPI_GETICONTITLELOGFONT, sizeof(lf), &lf, 0, dpi))
+		return;
+	HFONT hFont = CreateFontIndirect(&lf);
+	if (!hFont)
+		return;
+	::SendMessage(m_lv, WM_SETFONT, (WPARAM)hFont, TRUE);
+	if (m_hFont)
+		DeleteObject(m_hFont);
+	m_hFont = hFont;
+}
+
+// Sent when the window moves to a monitor with a different scale factor, or when the scale
+// factor of its monitor changes in Windows settings.
+LRESULT FSWindow::OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+	// Windows suggests a new size and position that keeps the window the same physical size.
+	RECT* prcNew = (RECT*)lParam;
+	SetWindowPos(NULL, prcNew->left, prcNew->top, prcNew->right - prcNew->left, prcNew->bottom - prcNew->top,
+		SWP_NOZORDER | SWP_NOACTIVATE);
+	UpdateFontForDpi();
+	// The new font changes the size of the rows and columns, so fit the window to the list again.
+	AdjustSizeForList();
 	return 0;
 }
 
@@ -735,6 +784,9 @@ void FSWindow::AdjustSizeForList()
 	ListView_SetColumnWidth(m_lv, 0, LVSCW_AUTOSIZE);
 	ListView_SetColumnWidth(m_lv, 1, LVSCW_AUTOSIZE);
 
+	// Use the measurements for the DPI of the monitor the window is on.
+	UINT dpi = GetDpiForWindow(m_hWnd);
+
 	// get the original window position and coordinates of the monitor it's on
 	RECT rc;
 	GetWindowRect(&rc);
@@ -754,7 +806,7 @@ void FSWindow::AdjustSizeForList()
 	else
 		rc.right = rc.left + approxWidth;
 	rc.bottom = rc.top + approxHeight;
-	AdjustWindowRectEx(&rc, GetWindowLong(GWL_STYLE), FALSE, GetWindowLong(GWL_EXSTYLE));
+	AdjustWindowRectExForDpi(&rc, GetWindowLong(GWL_STYLE), FALSE, GetWindowLong(GWL_EXSTYLE), dpi);
 
 	// if the title bar somehow got too high for the screen, align it with the top of the monitor
 	if (rc.top < mi.rcWork.top)
@@ -773,7 +825,7 @@ void FSWindow::AdjustSizeForList()
 	if (rc.bottom > mi.rcWork.bottom)
 	{
 		rc.bottom = mi.rcWork.bottom;
-		rc.right += GetSystemMetrics(SM_CXVSCROLL);
+		rc.right += GetSystemMetricsForDpi(SM_CXVSCROLL, dpi);
 	}
 	// if we're bumping out past the right of the monitor, bump it left instead
 	if (rc.right > mi.rcWork.right)
