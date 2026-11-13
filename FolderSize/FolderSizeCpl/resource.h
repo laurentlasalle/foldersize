@@ -46,6 +46,11 @@
 #define IDC_CREDITS_TRANSLATION         1044
 #define IDC_CREDITS_GRAPHIC             1045
 #define IDC_CREDITS_CODE                1046
+#define IDC_WINDOW_GROUP                1047
+#define IDC_MAX_WIDTH_LABEL             1048
+#define IDC_MAX_WIDTH                   1049
+#define IDC_MAX_WIDTH_SPIN              1050
+#define IDC_MAX_WIDTH_UNIT              1051
 #define IDC_FOLDERSIZEICON              1021
 #define IDC_TRANSLATORS                 1022
 

@@ -22,5 +22,13 @@ void SaveLanguageSetting(const std::wstring& code);
 
 int LoadDefaultSort();
 void SaveDefaultSort(int sort);
+
+// Maximum width of the size window, in pixels at 100% scaling (96 DPI): the window applies the
+// scaling of its monitor. Longer names are cut with "...".
+#define MAX_WINDOW_WIDTH_DEFAULT   600
+#define MAX_WINDOW_WIDTH_MIN       300
+#define MAX_WINDOW_WIDTH_MAX       2000
+int LoadMaxWindowWidth();
+void SaveMaxWindowWidth(int width);
 int LoadScanDriveTypes();
 LONG SaveScanDriveTypes(int DriveTypes);

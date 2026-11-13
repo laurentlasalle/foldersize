@@ -60,6 +60,12 @@ public:
 	
 	void UpdateSize(FOLDERINFO2& size) { m_size = size; }
 
+	// A folder that is a symbolic link or a junction to a folder elsewhere: its real path
+	// (see GetLinkTarget). Its size isn't part of the total of the folder shown.
+	void SetLinkTarget(LPCTSTR pszTarget) { lstrcpyn(m_linkTarget, pszTarget, MAX_PATH); }
+	bool IsLink() { return m_linkTarget[0] != '\0'; }
+	LPCTSTR GetLinkTarget() { return m_linkTarget; }
+
 private:
 	LPITEMIDLIST m_pidl;
 	FOLDERINFO2 m_size;
@@ -68,6 +74,7 @@ private:
 	int m_icon;
 	TCHAR m_filename[MAX_PATH];
 	TCHAR m_name[MAX_PATH];
+	TCHAR m_linkTarget[MAX_PATH] = {0};
 };
 
 class RefreshItem
@@ -228,6 +235,47 @@ static ULONGLONG GetProcessCpuTime()
 
 static LPITEMIDLIST GetBrowserFolder(IWebBrowser2* pWebBrowser);
 
+// If the folder pszPath is reached through a symbolic link or a junction (it is one, or one of
+// the folders above it is), gets its real path on a local drive in pszTarget (MAX_PATH), such as
+// D:\Music for C:\Users\laurent\Music, and returns true. Returns false for other folders, and when
+// the real path isn't on a drive letter (network share, volume without a letter): those keep
+// their path.
+//
+// The service doesn't compute folders reached through a link (FolderManager::GetFolder): their
+// content would be counted twice, and its changes are reported on the volume of the real path,
+// not on the one of the link. So the window asks the service with the real path instead.
+static bool GetLinkTarget(LPCTSTR pszPath, LPTSTR pszTarget)
+{
+	HANDLE hFolder = CreateFile(pszPath, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (hFolder == INVALID_HANDLE_VALUE)
+		return false;
+	WCHAR szFinal[MAX_PATH + 8];
+	DWORD cch = GetFinalPathNameByHandleW(hFolder, szFinal, MAX_PATH + 8, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+	CloseHandle(hFolder);
+	if (cch == 0 || cch >= MAX_PATH + 8)
+		return false;
+	// "\\?\D:\Music" for a drive letter, "\\?\UNC\server\share" for a network share
+	LPCWSTR pszFinal = szFinal;
+	if (StrCmpNW(pszFinal, L"\\\\?\\", 4) == 0)
+		pszFinal += 4;
+	if (!(pszFinal[0] && pszFinal[1] == L':' && pszFinal[2] == L'\\'))
+		return false;
+	if (lstrcmpiW(pszFinal, pszPath) == 0)
+		return false;  // not reached through a link
+	lstrcpynW(pszTarget, pszFinal, MAX_PATH);
+	return true;
+}
+
+// Lowercase copy of a path, to compare paths regardless of case.
+static std::wstring LowerPath(LPCTSTR pszPath)
+{
+	std::wstring path = pszPath;
+	if (!path.empty())
+		CharLowerBuffW(&path[0], (DWORD)path.size());
+	return path;
+}
+
 // Index in the system image list of the generic small folder or file icon, read once.
 static int GetGenericIcon(bool bFolder)
 {
@@ -351,6 +399,13 @@ DWORD FolderViewScanner::ThreadProc()
 	TCHAR szFolder[MAX_PATH];
 	szFolder[0] = '\0';
 	bool bThisPC = false;    // the folder is This PC: list the drives with their used space
+	// The folder reached through a link (see GetLinkTarget): its real path, used to ask the
+	// service for the sizes of its subfolders.
+	TCHAR szRealFolder[MAX_PATH];
+	bool bLinkedFolder = false;
+	// Rows that are links to folders elsewhere: real path (lowercase) -> name in this folder,
+	// to match the updates of their size from the service (see the refresh loop below).
+	map<wstring, wstring> linkRows;
 	LPARAM nViewItems = 0;   // number of items in File Explorer's view, see WM_ENUMDONE
 
 	IServiceProvider* psp;
@@ -380,6 +435,8 @@ DWORD FolderViewScanner::ThreadProc()
 							{
 								if (!SHGetPathFromIDList(pFolderID, szFolder))
 									bThisPC = IsThisPC(pFolderID);
+								else
+									bLinkedFolder = GetLinkTarget(szFolder, szRealFolder);
 								if (FAILED(SHBindToObject(NULL, pFolderID, NULL, IID_IShellFolder2, (void**)&psfLocal)))
 									psfLocal = NULL;
 								CoTaskMemFree(pFolderID);
@@ -459,6 +516,8 @@ DWORD FolderViewScanner::ThreadProc()
 											bool bIsDirectory = (dwFileAttributes != INVALID_FILE_ATTRIBUTES)
 												? (dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0
 												: (attributes & SFGAO_FOLDER) != 0;
+											TCHAR szLinkTarget[MAX_PATH];
+											szLinkTarget[0] = '\0';
 											ULARGE_INTEGER total, freeSpace;
 											if (bThisPC)
 											{
@@ -477,8 +536,22 @@ DWORD FolderViewScanner::ThreadProc()
 											}
 											else if (bIsDirectory)
 											{
+												// Ask the service with the real path of folders reached through
+												// a link: a row that is a link itself, or any subfolder of a
+												// folder reached through a link (see GetLinkTarget).
+												LPCTSTR pszQuery = pPath;
+												TCHAR szQuery[MAX_PATH];
+												if ((dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && GetLinkTarget(pPath, szLinkTarget))
+												{
+													pszQuery = szLinkTarget;
+													linkRows[LowerPath(szLinkTarget)] = PathFindFileName(pPath);
+												}
+												else if (bLinkedFolder && PathCombine(szQuery, szRealFolder, PathFindFileName(pPath)))
+												{
+													pszQuery = szQuery;
+												}
 												t = MeasureNowIf(m_bLog);
-												GetInfoForFolder(pPath, fi);
+												GetInfoForFolder(pszQuery, fi);
 												usFolderSizes += MeasureNowIf(m_bLog) - t;
 												nFolders++;
 											}
@@ -512,6 +585,8 @@ DWORD FolderViewScanner::ThreadProc()
 												// name can then be told apart. Folders keep the name File Explorer shows
 												// (some system folders show a localized name).
 												bIsDirectory ? szDisplayName : PathFindFileName(pPath), bIsDirectory);
+											if (szLinkTarget[0])
+												pItem->SetLinkTarget(szLinkTarget);
 											pItemID = NULL;
 
 											EnterCriticalSection(&m_cs);
@@ -576,8 +651,19 @@ DWORD FolderViewScanner::ThreadProc()
 
 		if (hPipe != INVALID_HANDLE_VALUE)
 		{
+			// Ask for the updates of the folder shown (its real path if reached through a link)
+			// and of the folders holding the real paths of the rows that are links.
+			LPCTSTR pszBrowsed = bLinkedFolder ? szRealFolder : szFolder;
+			std::wstring browsedLower = LowerPath(pszBrowsed);
 			Strings strsFoldersBrowsed;
-			strsFoldersBrowsed.insert(szFolder);
+			strsFoldersBrowsed.insert(pszBrowsed);
+			for (map<wstring, wstring>::const_iterator l = linkRows.begin(); l != linkRows.end(); l++)
+			{
+				TCHAR szParent[MAX_PATH];
+				lstrcpyn(szParent, l->first.c_str(), MAX_PATH);
+				if (PathRemoveFileSpec(szParent))
+					strsFoldersBrowsed.insert(szParent);
+			}
 			if (WriteGetUpdatedFoldersRequest(hPipe, strsFoldersBrowsed))
 			{
 				Strings strsFoldersToUpdate;
@@ -585,9 +671,28 @@ DWORD FolderViewScanner::ThreadProc()
 				{
 					for (Strings::const_iterator i = strsFoldersToUpdate.begin(); i != strsFoldersToUpdate.end(); i++)
 					{
+						// Find the row of the folder: a row that is a link, by its real path;
+						// otherwise a subfolder of the folder shown, by its name. When updates were
+						// also asked for the folders holding the real paths of links, their other
+						// subfolders aren't in the list: skip them.
+						std::wstring name;
+						std::wstring lower = LowerPath(i->c_str());
+						map<wstring, wstring>::const_iterator link = linkRows.find(lower);
+						if (link != linkRows.end())
+						{
+							name = link->second;
+						}
+						else
+						{
+							TCHAR szParent[MAX_PATH];
+							lstrcpyn(szParent, lower.c_str(), MAX_PATH);
+							if (!linkRows.empty() && (!PathRemoveFileSpec(szParent) || lstrcmp(szParent, browsedLower.c_str()) != 0))
+								continue;
+							name = PathFindFileName(i->c_str());
+						}
 						FOLDERINFO2 fi;
 						GetInfoForFolder(i->c_str(), fi);
-						RefreshItem* pItem = new RefreshItem(PathFindFileName(i->c_str()), fi);
+						RefreshItem* pItem = new RefreshItem(name.c_str(), fi);
 						EnterCriticalSection(&m_cs);
 						if (m_refreshItems.empty())
 							PostMessage(m_hWndPost, WM_REFRESHITEMS, 0, 0);
@@ -732,6 +837,7 @@ static const UINT_PTR LAYOUT_TIMER_ID = 2;
 // Colors of the list in dark mode, matching the dark File Explorer.
 static const COLORREF DARK_BACKGROUND = RGB(0x19, 0x19, 0x19);
 static const COLORREF DARK_TEXT = RGB(0xFF, 0xFF, 0xFF);
+static const COLORREF DARK_SECONDARY_TEXT = RGB(0x9D, 0x9D, 0x9D);  // dimmed text, such as the size of a link
 
 // What ListViewSubclassProc needs to draw the column header.
 struct HeaderDrawState
@@ -797,9 +903,11 @@ static LRESULT CALLBACK ListViewSubclassProc(HWND hwnd, UINT uMsg, WPARAM wParam
 	return DefSubclassProc(hwnd, uMsg, wParam, lParam);
 }
 
-// Returns the window of the tab currently in front in a File Explorer window. Each tab has
-// its own ShellTabWindowClass child window, and only the one in front is visible. On versions
-// of Windows without tabs there is only one, which is then always the active one.
+// Returns the window of the tab currently in front in a File Explorer window. Each tab has its own
+// ShellTabWindowClass child window. Earlier versions of File Explorer hid the windows of the
+// other tabs; recent ones leave them all visible and put the window of the tab in front first
+// (top of the order of child windows). The first visible one is the tab in front in both cases.
+// On versions of Windows without tabs there is only one, which is then always the active one.
 static HWND GetActiveTab(HWND hwndExplorer)
 {
 	HWND hwndFirst = FindWindowEx(hwndExplorer, NULL, _T("ShellTabWindowClass"), NULL);
@@ -867,6 +975,8 @@ BEGIN_MSG_MAP(FSWindow)
 	NOTIFY_HANDLER(1, LVN_COLUMNCLICK, OnColumnClick)
 	NOTIFY_HANDLER(1, LVN_DELETEALLITEMS, OnDeleteAllItems)
 	NOTIFY_HANDLER(1, LVN_GETDISPINFO, OnGetDispInfo)
+	NOTIFY_HANDLER(1, LVN_GETINFOTIP, OnGetInfoTip)
+	NOTIFY_HANDLER(1, NM_CUSTOMDRAW, OnListCustomDraw)
 END_MSG_MAP()
 
 	LRESULT OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -879,6 +989,9 @@ END_MSG_MAP()
 	LRESULT OnNewItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnRefreshItems(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnGetDispInfo(int idCtrl, LPNMHDR pnmh, BOOL& bHandled);
+	LRESULT OnGetInfoTip(int idCtrl, LPNMHDR pnmh, BOOL& bHandled);
+	LRESULT OnListCustomDraw(int idCtrl, LPNMHDR pnmh, BOOL& bHandled);
+	void UpdateTitle();
 	LRESULT OnEnumDone(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnShellChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 	LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -933,6 +1046,7 @@ private:
 	HWND m_hwndExplorer;  // top-level File Explorer window (shared by all its tabs)
 	HWND m_hwndTab;       // the tab's own window (ShellTabWindowClass), NULL if unknown
 	bool m_bDark;         // dark mode currently applied
+	int m_maxWidthDip;    // maximum width of the window at 100% scaling (setting, see LoadMaxWindowWidth)
 	HeaderDrawState m_headerState;  // read by ListViewSubclassProc
 	CComPtr<IWebBrowser2> m_pWebBrowser;
 	TCHAR m_szFolder[MAX_PATH * 4];
@@ -984,7 +1098,7 @@ private:
 	ULONG m_changeNotifyId;   // registration for change notifications of the folder (0 if none)
 };
 
-FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bSortNeeded(false), m_nameTextMax(0), m_sizeTextMax(0), m_bColumnsGrew(false), m_bTextWidthsStale(false), m_measureIconUs(0), m_measureIcons(0), m_bOtherLocation(false), m_bLogEnabled(false), m_measureReason(L"open"), m_measureStartTick(0), m_measureStartCpu(0), m_measureUiCpuStart(0), m_measureAddUs(0), m_measureLayoutUs(0), m_measureBatches(0), m_measureLayouts(0), m_scanStartTick(0), m_lastScanEndTick(0), m_lastScanMs(0), m_bChangePending(false), m_bReloadTimerSet(false), m_changeNotifyId(0)
+FSWindow::FSWindow(IWebBrowser2* pWebBrowser) : m_lv(NULL), m_hFont(NULL), m_hwndExplorer(NULL), m_hwndTab(NULL), m_bDark(false), m_maxWidthDip(LoadMaxWindowWidth()), m_headerState(), m_pWebBrowser(pWebBrowser), m_pScanner(NULL), m_sort(LoadDefaultSort()), m_scanGeneration(0), m_bReloading(false), m_bScanDone(false), m_nScannedViewItems(0), m_bCheckViewAfterScan(false), m_bLayoutPending(false), m_bSortNeeded(false), m_nameTextMax(0), m_sizeTextMax(0), m_bColumnsGrew(false), m_bTextWidthsStale(false), m_measureIconUs(0), m_measureIcons(0), m_bOtherLocation(false), m_bLogEnabled(false), m_measureReason(L"open"), m_measureStartTick(0), m_measureStartCpu(0), m_measureUiCpuStart(0), m_measureAddUs(0), m_measureLayoutUs(0), m_measureBatches(0), m_measureLayouts(0), m_scanStartTick(0), m_lastScanEndTick(0), m_lastScanMs(0), m_bChangePending(false), m_bReloadTimerSet(false), m_changeNotifyId(0)
 {
 	BrowserEvents::DispEventAdvise(m_pWebBrowser);
 	CreateIfUnminimizedFolderView();
@@ -1011,7 +1125,9 @@ LRESULT FSWindow::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandl
 	if (!m_lv)
 		return -1;
 
-	ListView_SetExtendedListViewStyle(m_lv, LVS_EX_FULLROWSELECT | LVS_EX_AUTOSIZECOLUMNS | LVS_EX_DOUBLEBUFFER);
+	// LVS_EX_INFOTIP: a tooltip shows the whole name of a row cut with "..." (see the maximum
+	// width in AdjustSizeForList), and the real path of rows that are links (see OnGetInfoTip).
+	ListView_SetExtendedListViewStyle(m_lv, LVS_EX_FULLROWSELECT | LVS_EX_AUTOSIZECOLUMNS | LVS_EX_DOUBLEBUFFER | LVS_EX_INFOTIP);
 
 	SetWindowSubclass(m_lv, ListViewSubclassProc, 0, (DWORD_PTR)&m_headerState);
 
@@ -1122,6 +1238,7 @@ LRESULT FSWindow::OnSettingsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOO
 {
 	RefreshUiLanguage();
 	ApplySort();
+	m_maxWidthDip = LoadMaxWindowWidth();
 	m_bTextWidthsStale = true;  // the sizes may be written differently
 	AdjustSizeForList();
 	return 0;
@@ -1379,6 +1496,72 @@ LRESULT FSWindow::OnGetDispInfo(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
 	return 0;
 }
 
+// The tooltip of a row: the list fills in the whole name of a row cut with "..."; for a row that
+// is a link, add where it leads and that its size isn't part of the total of the folder shown.
+LRESULT FSWindow::OnGetInfoTip(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
+{
+	NMLVGETINFOTIP* pTip = (NMLVGETINFOTIP*)pnmh;
+	LVITEM lvi = {0};
+	lvi.mask = LVIF_PARAM;
+	lvi.iItem = pTip->iItem;
+	if (!ListView_GetItem(m_lv, &lvi) || !lvi.lParam)
+		return 0;
+	ListItem* pItem = (ListItem*)lvi.lParam;
+	if (!pItem->IsLink())
+		return 0;
+	TCHAR szLink[MAX_PATH + 200];
+	wsprintf(szLink, Tr(STR_WINDOW_LINKED_FOLDER).c_str(), pItem->GetLinkTarget());
+	std::wstring tip;
+	if (!(pTip->dwFlags & LVGIT_UNFOLDED))
+		tip = std::wstring(pTip->pszText) + L"\n";  // the name is cut: pszText holds the whole name
+	tip += szLink;
+	lstrcpyn(pTip->pszText, tip.c_str(), pTip->cchTextMax);
+	return 0;
+}
+
+// Draws the size of the rows that are links in a dimmed color: it isn't part of the total of the
+// folder shown (see GetLinkTarget).
+LRESULT FSWindow::OnListCustomDraw(int idCtrl, LPNMHDR pnmh, BOOL& bHandled)
+{
+	LPNMLVCUSTOMDRAW pcd = (LPNMLVCUSTOMDRAW)pnmh;
+	if (pnmh->hwndFrom != m_lv)
+	{
+		bHandled = FALSE;
+		return CDRF_DODEFAULT;
+	}
+	ListItem* pItem = (ListItem*)pcd->nmcd.lItemlParam;
+	switch (pcd->nmcd.dwDrawStage)
+	{
+	case CDDS_PREPAINT:
+		return CDRF_NOTIFYITEMDRAW;
+	case CDDS_ITEMPREPAINT:
+		return (pItem && pItem->IsLink()) ? CDRF_NOTIFYSUBITEMDRAW : CDRF_DODEFAULT;
+	case CDDS_ITEMPREPAINT | CDDS_SUBITEM:
+		if (pcd->iSubItem == 1)
+			pcd->clrText = m_bDark ? DARK_SECONDARY_TEXT : GetSysColor(COLOR_GRAYTEXT);
+		else
+			pcd->clrText = m_bDark ? DARK_TEXT : GetSysColor(COLOR_WINDOWTEXT);
+		return CDRF_NEWFONT;
+	}
+	return CDRF_DODEFAULT;
+}
+
+// The title shows the real path of a folder reached through a link (see GetLinkTarget), such as
+// "Folder Size Redux - D:\Music" (with an em dash), and the name of the program otherwise.
+void FSWindow::UpdateTitle()
+{
+	std::wstring title = APP_NAME;
+	LPITEMIDLIST pidl = GetBrowserFolder(m_pWebBrowser);
+	if (pidl)
+	{
+		TCHAR szFolder[MAX_PATH], szTarget[MAX_PATH];
+		if (SHGetPathFromIDList(pidl, szFolder) && GetLinkTarget(szFolder, szTarget))
+			title = title + L" \x2014 " + szTarget;
+		CoTaskMemFree(pidl);
+	}
+	SetWindowText(title.c_str());
+}
+
 // Reads the icon of a row from the folder File Explorer shows, the same way File Explorer
 // does: custom folder icons (desktop.ini) and the icons of programs are included.
 int FSWindow::GetItemIcon(ListItem* pItem)
@@ -1548,6 +1731,7 @@ void FSWindow::StartScanner()
 	m_scanStartTick = GetTickCount64();
 	m_measureStartTick = m_scanStartTick;
 	m_bLogEnabled = IsDiagnosticLogEnabled();  // the only check for the log during this reading
+	UpdateTitle();
 	m_measureStartCpu = m_bLogEnabled ? GetProcessCpuTime() : 0;
 	m_measureUiCpuStart = m_bLogEnabled ? GetThreadCpuTime() : 0;
 	m_measureAddUs = m_measureLayoutUs = m_measureIconUs = 0;
@@ -1941,6 +2125,18 @@ void FSWindow::AdjustSizeForList(bool bMeasureColumns)
 		ListView_SetColumnWidth(m_lv, 1, LVSCW_AUTOSIZE);
 		ListView_SetColumnWidth(m_lv, 1, ListView_GetColumnWidth(m_lv, 1) + MulDiv(SIZE_COLUMN_EXTRA_DIP, dpi, 96));
 		m_bColumnsGrew = false;
+
+		// Keep the window within the maximum width (setting): narrow the name column, and the
+		// list ends the names that don't fit with "..." (the whole name shows in a tooltip).
+		// The room of a vertical scroll bar is always kept, so a list that gets one later still
+		// fits. The size column is never narrowed.
+		RECT rcFrame = { 0, 0, 0, 0 };
+		AdjustWindowRectExForDpi(&rcFrame, GetWindowLong(GWL_STYLE), FALSE, GetWindowLong(GWL_EXSTYLE), dpi);
+		int maxListWidth = MulDiv(m_maxWidthDip, dpi, 96) - (rcFrame.right - rcFrame.left)
+			- 2 * MulDiv(LIST_MARGIN_X_DIP, dpi, 96) - GetSystemMetricsForDpi(SM_CXVSCROLL, dpi) - 4;
+		int maxNameWidth = max(maxListWidth - ListView_GetColumnWidth(m_lv, 1), MulDiv(80, dpi, 96));
+		if (ListView_GetColumnWidth(m_lv, 0) > maxNameWidth)
+			ListView_SetColumnWidth(m_lv, 0, maxNameWidth);
 	}
 
 	// get the original window position and coordinates of the monitor it's on
@@ -2178,6 +2374,7 @@ END_SINK_MAP()
 	void StartPortableScanner();
 	void WatchTabs(HWND hwndExplorer);
 	static void CALLBACK TabEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD idEventThread, DWORD dwmsEventTime);
+	static void CALLBACK TitleEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD idEventThread, DWORD dwmsEventTime);
 
 	HICON m_icon;
 	HICON m_gray;
@@ -2188,6 +2385,8 @@ END_SINK_MAP()
 	set<FSWindow*> m_FSWindows;
 	// One event hook per process that hosts File Explorer windows, to see tabs being switched.
 	map<DWORD, HWINEVENTHOOK> m_tabHooks;
+	// One event hook per File Explorer window, on its title (see WatchTabs).
+	map<HWND, HWINEVENTHOOK> m_titleHooks;
 	bool m_bAutoRun;
 };
 
@@ -2335,6 +2534,9 @@ void ShellWindowManager::Deactivate()
 	for (map<DWORD, HWINEVENTHOOK>::iterator itr = m_tabHooks.begin(); itr != m_tabHooks.end(); itr++)
 		UnhookWinEvent(itr->second);
 	m_tabHooks.clear();
+	for (map<HWND, HWINEVENTHOOK>::iterator itr = m_titleHooks.begin(); itr != m_titleHooks.end(); itr++)
+		UnhookWinEvent(itr->second);
+	m_titleHooks.clear();
 	DispEventUnadvise(m_pShellWindows);
 	m_pShellWindows.Release();
 }
@@ -2403,8 +2605,23 @@ LRESULT ShellWindowManager::OnAppIconMsg(UINT uMsg, WPARAM wParam, LPARAM lParam
 LRESULT ShellWindowManager::OnKillWindow(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
 	FSWindow* pWindow = (FSWindow*)lParam;
+	HWND hwndExplorer = pWindow->GetExplorerWindow();
 	m_FSWindows.erase(pWindow);
 	delete pWindow;
+
+	// Stop watching the title of a File Explorer window that has no size window left.
+	map<HWND, HWINEVENTHOOK>::iterator hook = m_titleHooks.find(hwndExplorer);
+	if (hook != m_titleHooks.end())
+	{
+		bool bUsed = false;
+		for (set<FSWindow*>::iterator itr = m_FSWindows.begin(); itr != m_FSWindows.end() && !bUsed; itr++)
+			bUsed = (*itr)->GetExplorerWindow() == hwndExplorer;
+		if (!bUsed)
+		{
+			UnhookWinEvent(hook->second);
+			m_titleHooks.erase(hook);
+		}
+	}
 	return 0;
 }
 
@@ -2486,6 +2703,21 @@ void ShellWindowManager::AddFSWindow(IWebBrowser2* pwb)
 // the process that hosts the Explorer window, so the program wakes up only for Explorer windows.
 void ShellWindowManager::WatchTabs(HWND hwndExplorer)
 {
+	// Recent versions of File Explorer don't hide the inactive tabs: switching tabs only puts the
+	// new tab first among the tab windows (see GetActiveTab), which sends no event. But the title
+	// of the File Explorer window changes ("Music and 2 more tabs"), so watch it too. The hook is
+	// limited to the thread of that window, which gets few events: explorer.exe also hosts the
+	// taskbar, whose texts change often.
+	if (m_titleHooks.find(hwndExplorer) == m_titleHooks.end())
+	{
+		DWORD dwTitleProcessId = 0;
+		DWORD dwThreadId = GetWindowThreadProcessId(hwndExplorer, &dwTitleProcessId);
+		HWINEVENTHOOK hTitleHook = dwThreadId ? SetWinEventHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, NULL,
+			TitleEventProc, dwTitleProcessId, dwThreadId, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS) : NULL;
+		if (hTitleHook)
+			m_titleHooks[hwndExplorer] = hTitleHook;
+	}
+
 	DWORD dwProcessId = 0;
 	GetWindowThreadProcessId(hwndExplorer, &dwProcessId);
 	if (dwProcessId == 0 || m_tabHooks.find(dwProcessId) != m_tabHooks.end())
@@ -2505,6 +2737,17 @@ void CALLBACK ShellWindowManager::TabEventProc(HWINEVENTHOOK hook, DWORD event, 
 	TCHAR szClass[32];
 	if (GetClassName(hwnd, szClass, 32) && lstrcmp(szClass, _T("ShellTabWindowClass")) == 0)
 		::PostMessage(g_hwndMain, WM_UPDATETABS, (WPARAM)GetAncestor(hwnd, GA_ROOT), 0);
+}
+
+// Called on this program's main thread when a name changes in the thread of a File Explorer
+// window: if it's the title of that window, the active tab may have changed.
+void CALLBACK ShellWindowManager::TitleEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD idEventThread, DWORD dwmsEventTime)
+{
+	if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF || hwnd == NULL || GetAncestor(hwnd, GA_ROOT) != hwnd)
+		return;
+	TCHAR szClass[32];
+	if (GetClassName(hwnd, szClass, 32) && lstrcmp(szClass, _T("CabinetWClass")) == 0)
+		::PostMessage(g_hwndMain, WM_UPDATETABS, (WPARAM)hwnd, 0);
 }
 
 // Shows the size window of the active tab of an Explorer window and hides the others.

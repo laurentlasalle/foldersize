@@ -2,6 +2,7 @@
 #include <shlobj.h>   // for IShellWindows
 #include <olectl.h>
 #include <tchar.h>
+#include <commctrl.h> // up-down control of the maximum width
 #include "PropSheet.h"
 #include "Resource.h"
 #include "Hyperlinks.h"
@@ -37,7 +38,13 @@ static const DialogText g_GeneralTexts[] =
 	{ IDC_SORT_NAME_MIXED, STR_SORT_NAME_MIXED },
 	{ IDC_SORT_SIZE, STR_SORT_SIZE },
 	{ IDC_LANGUAGE_GROUP, STR_GENERAL_LANGUAGE },
+	{ IDC_WINDOW_GROUP, STR_GENERAL_WINDOW },
+	{ IDC_MAX_WIDTH_LABEL, STR_GENERAL_MAX_WIDTH },
 };
+
+// True while WM_INITDIALOG fills the General page, so filling the fields doesn't count as a
+// change (the edit box of the maximum width reports a change when its number is set).
+static bool g_bInitGeneral = false;
 
 static const DialogText g_ServiceTexts[] =
 {
@@ -191,6 +198,12 @@ INT_PTR CALLBACK GeneralProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			int Sort = LoadDefaultSort();
 			CheckRadioButton(hwndDlg, IDC_SORT_NAME, IDC_SORT_SIZE,
 				Sort == SORT_SIZE ? IDC_SORT_SIZE : Sort == SORT_NAME_MIXED ? IDC_SORT_NAME_MIXED : IDC_SORT_NAME);
+
+			// maximum width of the window: the arrows step through the allowed range
+			g_bInitGeneral = true;
+			SendDlgItemMessage(hwndDlg, IDC_MAX_WIDTH_SPIN, UDM_SETRANGE32, MAX_WINDOW_WIDTH_MIN, MAX_WINDOW_WIDTH_MAX);
+			SendDlgItemMessage(hwndDlg, IDC_MAX_WIDTH_SPIN, UDM_SETPOS32, 0, LoadMaxWindowWidth());
+			g_bInitGeneral = false;
 			return TRUE;
 		}
 	case WM_COMMAND:
@@ -207,6 +220,10 @@ INT_PTR CALLBACK GeneralProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 			break;
 		case IDC_LANGUAGE:
 			if (HIWORD(wParam) == CBN_SELCHANGE)
+				PropSheet_Changed(GetParent(hwndDlg), hwndDlg);
+			break;
+		case IDC_MAX_WIDTH:
+			if (HIWORD(wParam) == EN_CHANGE && !g_bInitGeneral)
 				PropSheet_Changed(GetParent(hwndDlg), hwndDlg);
 			break;
 		}
@@ -231,7 +248,18 @@ INT_PTR CALLBACK GeneralProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
 					SaveLanguageSetting(selected > 0 ? GetLanguageInfo(selected - 1).code : L"");
 				}
 
-				// Tell the running FolderSize.exe, so its windows pick up the new language. The
+				// maximum width of the window, brought back into the allowed range if needed
+				{
+					BOOL bNumber;
+					int width = (int)GetDlgItemInt(hwndDlg, IDC_MAX_WIDTH, &bNumber, FALSE);
+					if (!bNumber)
+						width = LoadMaxWindowWidth();
+					width = max(MAX_WINDOW_WIDTH_MIN, min(MAX_WINDOW_WIDTH_MAX, width));
+					SendDlgItemMessage(hwndDlg, IDC_MAX_WIDTH_SPIN, UDM_SETPOS32, 0, width);
+					SaveMaxWindowWidth(width);
+				}
+
+				// Tell the running FolderSize.exe, so its windows pick up the new language and width. The
 				// settings panel itself shows the new language the next time it is opened.
 				{
 					HWND hwndMain = FindWindow(MAIN_WINDOW_CLASS, NULL);
@@ -548,6 +576,10 @@ void DoPropertySheet(HWND hwndParent)
 	psh.nPages = i;
 	psh.nStartPage = 0;
 	psh.ppsp = psp;
+
+	// the up-down control (arrows) of the maximum width on the General page
+	INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_UPDOWN_CLASS };
+	InitCommonControlsEx(&icc);
 
 	PropertySheet(&psh);
 }

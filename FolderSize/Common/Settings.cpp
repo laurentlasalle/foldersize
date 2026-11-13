@@ -60,6 +60,30 @@ int LoadDefaultSort()
 	return sort;
 }
 
+int LoadMaxWindowWidth()
+{
+	int width = MAX_WINDOW_WIDTH_DEFAULT;
+	HKEY hKey;
+	if (RegOpenKeyEx(HKEY_CURRENT_USER, USER_SETTINGS_KEY, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+	{
+		DWORD dw;
+		if (LoadDWord(hKey, TEXT("MaxWindowWidth"), dw) && dw >= MAX_WINDOW_WIDTH_MIN && dw <= MAX_WINDOW_WIDTH_MAX)
+			width = (int)dw;
+		RegCloseKey(hKey);
+	}
+	return width;
+}
+
+void SaveMaxWindowWidth(int width)
+{
+	HKEY hKey;
+	if (RegCreateKeyEx(HKEY_CURRENT_USER, USER_SETTINGS_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+	{
+		SaveDWord(hKey, TEXT("MaxWindowWidth"), (DWORD)width);
+		RegCloseKey(hKey);
+	}
+}
+
 void SaveDefaultSort(int sort)
 {
 	HKEY hKey;
